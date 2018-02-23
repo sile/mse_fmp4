@@ -25,6 +25,10 @@ fn main() {
                     let b = track_try_unwrap!(isobmff::FileTypeBox::read_from(&mut reader));
                     println!("  {:?}", b);
                 }
+                isobmff::MediaDataBox::TYPE => {
+                    let b = track_try_unwrap!(isobmff::MediaDataBox::read_from(&mut reader));
+                    println!("  MediaDataBox({} bytes)", b.data.len());
+                }
                 _ => {
                     let mut buf = Vec::new();
                     track_try_unwrap!(reader.read_to_end(&mut buf).map_err(Failure::from_error));

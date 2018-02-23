@@ -136,4 +136,22 @@ impl FileTypeBox {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Quantity {
     ExactlyOne,
+    ZeroOrMore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MediaDataBox {
+    pub data: Vec<u8>,
+}
+impl MediaDataBox {
+    pub const TYPE: BoxType = BoxType([b'm', b'd', b'a', b't']);
+    pub const CONTAINER: &'static str = "File";
+    pub const MANDATORY: bool = false;
+    pub const QUANTITY: Quantity = Quantity::ZeroOrMore;
+
+    pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let mut data = Vec::new();
+        track_io!(reader.read_to_end(&mut data))?;
+        Ok(MediaDataBox { data })
+    }
 }

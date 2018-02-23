@@ -3,6 +3,7 @@ extern crate fmp4;
 extern crate trackable;
 
 use std::io::Read;
+use fmp4::isobmff;
 use trackable::error::Failure;
 
 fn main() {
@@ -17,12 +18,19 @@ fn main() {
             std::io::stdin()
         )));
         println!("{:?}", header);
-
-        let mut buf = vec![0; header.data_size() as usize];
-        track_try_unwrap!(
-            std::io::stdin()
-                .read_exact(&mut buf)
-                .map_err(Failure::from_error)
-        );
+        {
+            let mut reader = std::io::stdin().take(u64::from(header.data_size()));
+            match header.kind {
+                isobmff::FileTypeBox::TYPE => {
+                    let b = track_try_unwrap!(isobmff::FileTypeBox::read_from(&mut reader));
+                    println!("  {:?}", b);
+                }
+                _ => {
+                    let mut buf = Vec::new();
+                    track_try_unwrap!(reader.read_to_end(&mut buf).map_err(Failure::from_error));
+                }
+            }
+            assert_eq!(reader.limit(), 0);
+        }
     }
 }

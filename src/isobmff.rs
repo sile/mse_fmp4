@@ -80,13 +80,57 @@ impl fmt::Debug for BoxType {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Brand(pub [u8; 4]);
+impl Brand {
+    pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let mut buf = [0; 4];
+        track_io!(reader.read_exact(&mut buf[..]))?;
+        Ok(Brand(buf))
+    }
+}
+impl fmt::Debug for Brand {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Ok(s) = str::from_utf8(&self.0) {
+            write!(f, "Brand(b{:?})", s)
+        } else {
+            write!(f, "Brand({:?})", self.0)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FileTypeBox;
+pub struct FileTypeBox {
+    pub major_brand: Brand,
+    pub minor_version: u32,
+    pub compatible_brands: Vec<Brand>,
+}
 impl FileTypeBox {
-    pub const BOX_TYPE: BoxType = BoxType(*b"ftyp");
+    pub const TYPE: BoxType = BoxType([b'f', b't', b'y', b'p']);
     pub const CONTAINER: &'static str = "File";
     pub const MANDATORY: bool = true;
     pub const QUANTITY: Quantity = Quantity::ExactlyOne;
+
+    pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        // let header = track!(BoxHeader::read_from(&mut reader))?;
+        // track_assert_eq!(header.kind, Self::TYPE, ErrorKind::InvalidInput);
+
+        // let mut reader = reader.take(u64::from(header.data_size()));
+        let major_brand = track!(Brand::read_from(&mut reader))?;
+        let minor_version = track_io!(reader.read_u32::<BigEndian>())?;
+        let mut compatible_brands = Vec::new();
+
+        let mut peek = [0];
+        while 0 != track_io!(reader.read(&mut peek))? {
+            compatible_brands.push(track!(Brand::read_from(peek.chain(&mut reader)))?);
+        }
+
+        Ok(FileTypeBox {
+            major_brand,
+            minor_version,
+            compatible_brands,
+        })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

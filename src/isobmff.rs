@@ -1,7 +1,9 @@
+use std::ffi::CString;
 use std::fmt;
 use std::io::Read;
 use std::str;
 use byteorder::{BigEndian, ReadBytesExt};
+use trackable::error::ErrorKindExt;
 
 use {ErrorKind, Result};
 
@@ -89,16 +91,7 @@ pub struct FileTypeBox {
     pub compatible_brands: Vec<Brand>,
 }
 impl FileTypeBox {
-    pub const TYPE: BoxType = BoxType([b'f', b't', b'y', b'p']);
-    pub const CONTAINER: &'static str = "File";
-    pub const MANDATORY: bool = true;
-    pub const QUANTITY: Quantity = Quantity::ExactlyOne;
-
     pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
-        // let header = track!(BoxHeader::read_from(&mut reader))?;
-        // track_assert_eq!(header.kind, Self::TYPE, ErrorKind::InvalidInput);
-
-        // let mut reader = reader.take(u64::from(header.data_size()));
         let major_brand = track!(Brand::read_from(&mut reader))?;
         let minor_version = track_io!(reader.read_u32::<BigEndian>())?;
         let mut compatible_brands = Vec::new();
@@ -116,22 +109,11 @@ impl FileTypeBox {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Quantity {
-    ExactlyOne,
-    ZeroOrMore,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MediaDataBox {
     pub data: Vec<u8>,
 }
 impl MediaDataBox {
-    pub const TYPE: BoxType = BoxType([b'm', b'd', b'a', b't']);
-    pub const CONTAINER: &'static str = "File";
-    pub const MANDATORY: bool = false;
-    pub const QUANTITY: Quantity = Quantity::ZeroOrMore;
-
     pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
         let mut data = Vec::new();
         track_io!(reader.read_to_end(&mut data))?;
@@ -305,18 +287,268 @@ impl MvhdBox {
     }
 }
 
-/// Track Box.
+/// 8.3.1 Track Box.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TrakBox {}
+pub struct TrakBox {
+    pub tkhd_box: TkhdBox,
+    pub mdia_box: MdiaBox,
+}
 impl TrakBox {
     pub fn read_from<R: Read>(reader: R) -> Result<Self> {
+        let mut tkhd_box = None;
+        let mut mdia_box = None;
         track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"tkhd" => {
+                track_assert!(tkhd_box.is_none(), ErrorKind::InvalidInput);
+                let x = track!(TkhdBox::read_from(reader))?;
+                println!("        [tkhd] {:?}", x);
+                tkhd_box = Some(x);
+                Ok(())
+            }
+            b"mdia" => {
+                track_assert!(mdia_box.is_none(), ErrorKind::InvalidInput);
+                println!("        [mdia]");
+                let x = track!(MdiaBox::read_from(reader))?;
+                mdia_box = Some(x);
+                Ok(())
+            }
             _ => {
                 println!("        [todo] {:?}", kind);
                 track_io!(reader.read_to_end(&mut Vec::new()))?;
                 Ok(())
             }
         }))?;
-        Ok(TrakBox {})
+
+        let tkhd_box = track_assert_some!(tkhd_box, ErrorKind::InvalidInput);
+        let mdia_box = track_assert_some!(mdia_box, ErrorKind::InvalidInput);
+        Ok(TrakBox { tkhd_box, mdia_box })
+    }
+}
+
+/// 8.3.2 Track Header Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TkhdBox {
+    pub track_enabled: bool,
+    pub track_in_movie: bool,
+    pub track_in_preview: bool,
+    pub track_size_is_aspect_ratio: bool,
+
+    pub creation_time: u64,
+    pub modification_time: u64,
+    pub track_id: u32,
+    pub duration: u64,
+    pub layer: i16,
+    pub alternate_group: i16,
+    pub volume: i16, // fixed point 8.8
+    pub matrix: [i32; 9],
+    pub width: u32,  // fixed point 16.16
+    pub height: u32, // fixed point 16.16
+}
+impl TkhdBox {
+    pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+
+        let creation_time;
+        let modification_time;
+        let track_id;
+        let duration;
+        if header.version == 0 {
+            creation_time = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+            modification_time = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+            track_id = track_io!(reader.read_u32::<BigEndian>())?;
+            let _ = track_io!(reader.read_exact(&mut [0; 4][..]))?; // reserved
+            duration = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+        } else if header.version == 1 {
+            creation_time = track_io!(reader.read_u64::<BigEndian>())?;
+            modification_time = track_io!(reader.read_u64::<BigEndian>())?;
+            track_id = track_io!(reader.read_u32::<BigEndian>())?;
+            let _ = track_io!(reader.read_exact(&mut [0; 4][..]))?; // reserved
+            duration = track_io!(reader.read_u64::<BigEndian>())?;
+        } else {
+            track_panic!(ErrorKind::Unsupported, "version={}", header.version);
+        }
+
+        let _ = track_io!(reader.read_exact(&mut [0; 8][..]))?; // reserved
+        let layer = track_io!(reader.read_i16::<BigEndian>())?;
+        let alternate_group = track_io!(reader.read_i16::<BigEndian>())?;
+        let volume = track_io!(reader.read_i16::<BigEndian>())?;
+        let _ = track_io!(reader.read_exact(&mut [0; 2][..]))?; // reserved
+
+        let mut matrix = [0; 9];
+        for i in 0..9 {
+            matrix[i] = track_io!(reader.read_i32::<BigEndian>())?;
+        }
+
+        let width = track_io!(reader.read_u32::<BigEndian>())?;
+        let height = track_io!(reader.read_u32::<BigEndian>())?;
+        Ok(TkhdBox {
+            track_enabled: (header.flags & 0x00_0001) != 0,
+            track_in_movie: (header.flags & 0x00_0002) != 0,
+            track_in_preview: (header.flags & 0x00_0004) != 0,
+            track_size_is_aspect_ratio: (header.flags & 0x00_0008) != 0,
+            creation_time,
+            modification_time,
+            track_id,
+            duration,
+            layer,
+            alternate_group,
+            volume,
+            matrix,
+            width,
+            height,
+        })
+    }
+}
+
+/// 8.4.1 Media Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MdiaBox {
+    pub mdhd_box: MdhdBox,
+    pub hdlr_box: HdlrBox,
+    pub minf_box: MinfBox,
+}
+impl MdiaBox {
+    pub fn read_from<R: Read>(reader: R) -> Result<Self> {
+        let mut mdhd_box = None;
+        let mut hdlr_box = None;
+        let mut minf_box = None;
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"mdhd" => track!(read_exactly_one(reader, &mut mdhd_box)),
+            b"hdlr" => track!(read_exactly_one(reader, &mut hdlr_box)),
+            b"minf" => track!(read_exactly_one(reader, &mut minf_box)),
+            _ => {
+                println!("            [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+
+        Ok(MdiaBox {
+            mdhd_box: track_assert_some!(mdhd_box, ErrorKind::InvalidInput),
+            hdlr_box: track_assert_some!(hdlr_box, ErrorKind::InvalidInput),
+            minf_box: track_assert_some!(minf_box, ErrorKind::InvalidInput),
+        })
+    }
+}
+
+pub trait ReadFrom: Sized {
+    fn read_from<R: Read>(reader: R) -> Result<Self>;
+}
+
+fn read_exactly_one<R: Read, T: ReadFrom>(reader: R, t: &mut Option<T>) -> Result<()> {
+    track_assert!(t.is_none(), ErrorKind::InvalidInput);
+    *t = Some(track!(T::read_from(reader))?);
+    Ok(())
+}
+
+/// 8.4.2 Media Header Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MdhdBox {
+    pub creation_time: u64,
+    pub modification_time: u64,
+    pub timescale: u32,
+    pub duration: u64,
+    pub language: u16,
+}
+impl ReadFrom for MdhdBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+
+        let creation_time;
+        let modification_time;
+        let timescale;
+        let duration;
+        if header.version == 0 {
+            creation_time = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+            modification_time = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+            timescale = track_io!(reader.read_u32::<BigEndian>())?;
+            duration = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+        } else if header.version == 1 {
+            creation_time = track_io!(reader.read_u64::<BigEndian>())?;
+            modification_time = track_io!(reader.read_u64::<BigEndian>())?;
+            timescale = track_io!(reader.read_u32::<BigEndian>())?;
+            duration = track_io!(reader.read_u64::<BigEndian>())?;
+        } else {
+            track_panic!(ErrorKind::Unsupported, "version={}", header.version);
+        }
+
+        let language = track_io!(reader.read_u16::<BigEndian>())?;
+        let _ = track_io!(reader.read_exact(&mut [0; 2][..]))?; // pre_defined
+        let this = MdhdBox {
+            creation_time,
+            modification_time,
+            timescale,
+            duration,
+            language,
+        };
+        println!("            [mdhd] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 8.4.3 Handler Reference Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HdlrBox {
+    pub handler_type: u32,
+    pub name: CString,
+}
+impl ReadFrom for HdlrBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::Unsupported);
+
+        let _ = track_io!(reader.read_u32::<BigEndian>())?; // pre_defined
+        let handler_type = track_io!(reader.read_u32::<BigEndian>())?;
+        let _ = track_io!(reader.read_exact(&mut [0; 12][..]))?; // reserved
+
+        let mut name = Vec::new();
+        track_io!(reader.read_to_end(&mut name))?;
+        name.pop(); // NOTE: assumes the last byte is null
+        let name = track!(CString::new(name).map_err(|e| ErrorKind::InvalidInput.cause(e)))?;
+
+        let this = HdlrBox { handler_type, name };
+        println!("            [hdlr] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 8.4.4 Media Information Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MinfBox {
+    pub stbl_box: StblBox,
+}
+impl ReadFrom for MinfBox {
+    fn read_from<R: Read>(reader: R) -> Result<Self> {
+        println!("            [minf]");
+        let mut stbl_box = None;
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"stbl" => track!(read_exactly_one(reader, &mut stbl_box)),
+            _ => {
+                println!("                [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+
+        Ok(MinfBox {
+            stbl_box: track_assert_some!(stbl_box, ErrorKind::InvalidInput),
+        })
+    }
+}
+
+/// 8.5.1 Sample Table Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StblBox {}
+impl ReadFrom for StblBox {
+    fn read_from<R: Read>(reader: R) -> Result<Self> {
+        println!("                [stbl]");
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            _ => {
+                println!("                    [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+        Ok(StblBox {})
     }
 }

@@ -1,12 +1,12 @@
 extern crate clap;
-extern crate fmp4;
+extern crate mse_fmp4;
 #[macro_use]
 extern crate trackable;
 
 use std::io::{stdin, Read};
 use clap::{App, Arg};
-use fmp4::{Error, ErrorKind, Result};
-use fmp4::isobmff;
+use mse_fmp4::{Error, ErrorKind, Result};
+use mse_fmp4::isobmff;
 
 macro_rules! track_io {
     ($expr:expr) => {

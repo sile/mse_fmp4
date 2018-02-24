@@ -194,12 +194,13 @@ impl fmt::Debug for File {
 pub struct MoovBox {
     pub mvhd_box: MvhdBox,
     pub trak_boxes: Vec<TrakBox>,
+    pub mvex_box: Option<MvexBox>,
 }
 impl MoovBox {
     pub fn read_from<R: Read>(reader: R) -> Result<Self> {
         let mut mvhd_box = None;
         let mut trak_boxes = Vec::new();
-
+        let mut mvex_box = None;
         track!(each_boxes(reader, |kind, reader| match &kind.0 {
             b"mvhd" => {
                 track_assert!(mvhd_box.is_none(), ErrorKind::InvalidInput);
@@ -214,6 +215,7 @@ impl MoovBox {
                 trak_boxes.push(x);
                 Ok(())
             }
+            b"mvex" => track!(read_exactly_one(reader, &mut mvex_box)),
             _ => {
                 println!("    [todo] {:?}", kind);
                 track_io!(reader.read_to_end(&mut Vec::new()))?;
@@ -226,6 +228,7 @@ impl MoovBox {
         Ok(MoovBox {
             mvhd_box,
             trak_boxes,
+            mvex_box,
         })
     }
 }
@@ -287,16 +290,106 @@ impl MvhdBox {
     }
 }
 
+/// 8.8.1 Movie Extends Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MvexBox {
+    pub mehd_box: Option<MehdBox>,
+    pub trex_boxes: Vec<TrexBox>,
+}
+impl ReadFrom for MvexBox {
+    fn read_from<R: Read>(reader: R) -> Result<Self> {
+        println!("    [mvex]");
+
+        let mut mehd_box = None;
+        let mut trex_boxes = Vec::new();
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"mehd" => track!(read_exactly_one(reader, &mut mehd_box)),
+            b"trex" => {
+                trex_boxes.push(track!(TrexBox::read_from(reader))?);
+                Ok(())
+            }
+            _ => {
+                println!("        [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+
+        Ok(MvexBox {
+            mehd_box,
+            trex_boxes,
+        })
+    }
+}
+
+/// 8.8.2 Movie Extends Header Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MehdBox {
+    pub fragment_duration: u64,
+}
+impl ReadFrom for MehdBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+
+        let fragment_duration;
+        if header.version == 0 {
+            fragment_duration = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+        } else if header.version == 1 {
+            fragment_duration = track_io!(reader.read_u64::<BigEndian>())?;
+        } else {
+            track_panic!(ErrorKind::InvalidInput, "version={}", header.version);
+        }
+
+        let this = MehdBox { fragment_duration };
+        println!("        [mehd] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 8.8.3 Track Extends Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TrexBox {
+    pub track_id: u32,
+    pub default_sample_description_index: u32,
+    pub default_sample_duration: u32,
+    pub default_sample_size: u32,
+    pub default_sample_flags: u32,
+}
+impl ReadFrom for TrexBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::InvalidInput);
+
+        let track_id = track_io!(reader.read_u32::<BigEndian>())?;
+        let default_sample_description_index = track_io!(reader.read_u32::<BigEndian>())?;
+        let default_sample_duration = track_io!(reader.read_u32::<BigEndian>())?;
+        let default_sample_size = track_io!(reader.read_u32::<BigEndian>())?;
+        let default_sample_flags = track_io!(reader.read_u32::<BigEndian>())?;
+
+        let this = TrexBox {
+            track_id,
+            default_sample_description_index,
+            default_sample_duration,
+            default_sample_size,
+            default_sample_flags,
+        };
+        println!("        [trex] {:?}", this);
+        Ok(this)
+    }
+}
+
 /// 8.3.1 Track Box.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TrakBox {
     pub tkhd_box: TkhdBox,
     pub mdia_box: MdiaBox,
+    pub edts_box: Option<EdtsBox>,
 }
 impl TrakBox {
     pub fn read_from<R: Read>(reader: R) -> Result<Self> {
         let mut tkhd_box = None;
         let mut mdia_box = None;
+        let mut edts_box = None;
         track!(each_boxes(reader, |kind, reader| match &kind.0 {
             b"tkhd" => {
                 track_assert!(tkhd_box.is_none(), ErrorKind::InvalidInput);
@@ -312,6 +405,7 @@ impl TrakBox {
                 mdia_box = Some(x);
                 Ok(())
             }
+            b"edts" => track!(read_exactly_one(reader, &mut edts_box)),
             _ => {
                 println!("        [todo] {:?}", kind);
                 track_io!(reader.read_to_end(&mut Vec::new()))?;
@@ -321,7 +415,11 @@ impl TrakBox {
 
         let tkhd_box = track_assert_some!(tkhd_box, ErrorKind::InvalidInput);
         let mdia_box = track_assert_some!(mdia_box, ErrorKind::InvalidInput);
-        Ok(TrakBox { tkhd_box, mdia_box })
+        Ok(TrakBox {
+            tkhd_box,
+            mdia_box,
+            edts_box,
+        })
     }
 }
 
@@ -890,4 +988,73 @@ impl ReadFrom for StcoBox {
         println!("                    [stco] {:?}", this);
         Ok(this)
     }
+}
+
+/// 8.6.5 Edit Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EdtsBox {
+    pub elst_box: Option<ElstBox>,
+}
+impl ReadFrom for EdtsBox {
+    fn read_from<R: Read>(reader: R) -> Result<Self> {
+        println!("            [edts]");
+
+        let mut elst_box = None;
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"elst" => track!(read_exactly_one(reader, &mut elst_box)),
+            _ => {
+                println!("                [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+
+        Ok(EdtsBox { elst_box })
+    }
+}
+
+/// 8.6.6 Edit List Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ElstBox {
+    pub entries: Vec<ElstEntry>,
+}
+impl ReadFrom for ElstBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+
+        let entry_count = track_io!(reader.read_u32::<BigEndian>())?;
+        let mut entries = Vec::with_capacity(entry_count as usize);
+        for _ in 0..entry_count {
+            let segment_duration;
+            let media_time;
+            if header.version == 0 {
+                segment_duration = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+                media_time = i64::from(track_io!(reader.read_i32::<BigEndian>())?);
+            } else if header.version == 1 {
+                segment_duration = track_io!(reader.read_u64::<BigEndian>())?;
+                media_time = track_io!(reader.read_i64::<BigEndian>())?;
+            } else {
+                track_panic!(ErrorKind::InvalidInput, "version={}", header.version);
+            }
+            let media_rate_integer = track_io!(reader.read_i16::<BigEndian>())?;
+            let media_rate_fraction = track_io!(reader.read_i16::<BigEndian>())?;
+            entries.push(ElstEntry {
+                segment_duration,
+                media_time,
+                media_rate_integer,
+                media_rate_fraction,
+            });
+        }
+        let this = ElstBox { entries };
+        println!("                [elst] {:?}", this);
+        Ok(this)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ElstEntry {
+    pub segment_duration: u64,
+    pub media_time: i64,
+    pub media_rate_integer: i16,
+    pub media_rate_fraction: i16,
 }

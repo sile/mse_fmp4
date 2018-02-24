@@ -48,7 +48,7 @@ fn parse_toplevel() -> Result<()> {
 }
 
 fn parse_tree() -> Result<()> {
-    let file = track!(isobmff::File::read_from(stdin()));
+    let file = track_try_unwrap!(isobmff::File::read_from(stdin()));
     println!("{:?}", file);
     Ok(())
 }

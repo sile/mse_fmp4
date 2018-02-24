@@ -516,13 +516,22 @@ impl ReadFrom for HdlrBox {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MinfBox {
     pub stbl_box: StblBox,
+    pub dinf_box: DinfBox,
+    pub vmhd_box: Option<VmhdBox>,
+    pub smhd_box: Option<SmhdBox>,
 }
 impl ReadFrom for MinfBox {
     fn read_from<R: Read>(reader: R) -> Result<Self> {
         println!("            [minf]");
         let mut stbl_box = None;
+        let mut dinf_box = None;
+        let mut vmhd_box = None;
+        let mut smhd_box = None;
         track!(each_boxes(reader, |kind, reader| match &kind.0 {
             b"stbl" => track!(read_exactly_one(reader, &mut stbl_box)),
+            b"dinf" => track!(read_exactly_one(reader, &mut dinf_box)),
+            b"vmhd" => track!(read_exactly_one(reader, &mut vmhd_box)),
+            b"smhd" => track!(read_exactly_one(reader, &mut smhd_box)),
             _ => {
                 println!("                [todo] {:?}", kind);
                 track_io!(reader.read_to_end(&mut Vec::new()))?;
@@ -532,7 +541,150 @@ impl ReadFrom for MinfBox {
 
         Ok(MinfBox {
             stbl_box: track_assert_some!(stbl_box, ErrorKind::InvalidInput),
+            dinf_box: track_assert_some!(dinf_box, ErrorKind::InvalidInput),
+            vmhd_box,
+            smhd_box,
         })
+    }
+}
+
+/// 12.1.2 Video Media Header Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VmhdBox {
+    pub graphicsmode: u16,
+    pub opcolor: [u16; 3],
+}
+impl ReadFrom for VmhdBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::InvalidInput);
+        track_assert_eq!(header.flags, 1, ErrorKind::InvalidInput);
+
+        let graphicsmode = track_io!(reader.read_u16::<BigEndian>())?;
+        let opcolor = [
+            track_io!(reader.read_u16::<BigEndian>())?,
+            track_io!(reader.read_u16::<BigEndian>())?,
+            track_io!(reader.read_u16::<BigEndian>())?,
+        ];
+
+        let this = VmhdBox {
+            graphicsmode,
+            opcolor,
+        };
+        println!("                [vmhd] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 12.2.2 Sound Media Header Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SmhdBox {
+    pub balance: u16, // fixed point 8.8
+}
+impl ReadFrom for SmhdBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::InvalidInput);
+
+        let balance = track_io!(reader.read_u16::<BigEndian>())?;
+        let _ = track_io!(reader.read_exact(&mut [0; 2][..]))?; // reserved
+        let this = SmhdBox { balance };
+        println!("                [smhd] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 8.7.1 Data Information Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DinfBox {
+    pub dref_box: DrefBox,
+}
+impl ReadFrom for DinfBox {
+    fn read_from<R: Read>(reader: R) -> Result<Self> {
+        println!("                [dinf]");
+        let mut dref_box = None;
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"dref" => track!(read_exactly_one(reader, &mut dref_box)),
+            _ => {
+                println!("                    [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+
+        Ok(DinfBox {
+            dref_box: track_assert_some!(dref_box, ErrorKind::InvalidInput),
+        })
+    }
+}
+
+/// 8.7.2 Data Reference Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DrefBox {
+    pub entries: Vec<DataEntryBox>,
+}
+impl ReadFrom for DrefBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        println!("                    [dref]");
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::InvalidInput);
+
+        let entry_count = track_io!(reader.read_u32::<BigEndian>())?;
+        track_assert_ne!(entry_count, 0, ErrorKind::InvalidInput);
+
+        let mut entries = Vec::with_capacity(entry_count as usize);
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"url " => {
+                entries.push(DataEntryBox::Url(track!(UrlBox::read_from(reader))?));
+                Ok(())
+            }
+            b"urn " => {
+                entries.push(DataEntryBox::Urn(track!(UrnBox::read_from(reader))?));
+                Ok(())
+            }
+            _ => track_panic!(ErrorKind::InvalidInput, "Unexpected box type: {:?}", kind),
+        }))?;
+        track_assert_eq!(entries.len(), entry_count as usize, ErrorKind::InvalidInput);
+        Ok(DrefBox { entries })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DataEntryBox {
+    Url(UrlBox),
+    Urn(UrnBox),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UrlBox {
+    pub location: Option<CString>,
+}
+impl ReadFrom for UrlBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::InvalidInput);
+        let this = if (header.flags & 0x00_0001) != 0 {
+            UrlBox { location: None }
+        } else {
+            let mut buf = Vec::new();
+            track_io!(reader.read_to_end(&mut buf))?;
+            track_assert_eq!(buf.pop(), Some(0), ErrorKind::InvalidInput);
+
+            let location = Some(track!(
+                CString::new(buf).map_err(|e| ErrorKind::InvalidInput.cause(e))
+            )?);
+            UrlBox { location }
+        };
+        println!("                        [url ] {:?}", this);
+        Ok(this)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UrnBox {}
+impl ReadFrom for UrnBox {
+    fn read_from<R: Read>(_reader: R) -> Result<Self> {
+        track_panic!(ErrorKind::Unsupported);
     }
 }
 

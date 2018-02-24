@@ -538,17 +538,204 @@ impl ReadFrom for MinfBox {
 
 /// 8.5.1 Sample Table Box
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StblBox {}
+pub struct StblBox {
+    pub stsd_box: StsdBox,
+    pub stts_box: SttsBox,
+    pub stsc_box: StscBox,
+    pub stsz_box: StszBox,
+    pub stco_box: StcoBox,
+}
 impl ReadFrom for StblBox {
     fn read_from<R: Read>(reader: R) -> Result<Self> {
         println!("                [stbl]");
+        let mut stsd_box = None;
+        let mut stts_box = None;
+        let mut stsc_box = None;
+        let mut stsz_box = None;
+        let mut stco_box = None;
         track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"stsd" => track!(read_exactly_one(reader, &mut stsd_box)),
+            b"stts" => track!(read_exactly_one(reader, &mut stts_box)),
+            b"stsc" => track!(read_exactly_one(reader, &mut stsc_box)),
+            b"stsz" => track!(read_exactly_one(reader, &mut stsz_box)),
+            b"stco" => track!(read_exactly_one(reader, &mut stco_box)),
             _ => {
                 println!("                    [todo] {:?}", kind);
                 track_io!(reader.read_to_end(&mut Vec::new()))?;
                 Ok(())
             }
         }))?;
-        Ok(StblBox {})
+
+        Ok(StblBox {
+            stsd_box: track_assert_some!(stsd_box, ErrorKind::InvalidInput),
+            stts_box: track_assert_some!(stts_box, ErrorKind::InvalidInput),
+            stsc_box: track_assert_some!(stsc_box, ErrorKind::InvalidInput),
+            stsz_box: track_assert_some!(stsz_box, ErrorKind::InvalidInput),
+            stco_box: track_assert_some!(stco_box, ErrorKind::InvalidInput),
+        })
+    }
+}
+
+/// 8.5.2 Sample Description Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StsdBox {
+    pub sample_entries: Vec<SampleEntry>,
+}
+impl ReadFrom for StsdBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::Unsupported);
+
+        let entry_count = track_io!(reader.read_u32::<BigEndian>())?;
+        let mut sample_entries = Vec::with_capacity(entry_count as usize);
+        for _ in 0..entry_count {
+            sample_entries.push(track!(SampleEntry::read_from(&mut reader))?);
+        }
+        let this = StsdBox { sample_entries };
+        println!("                    [stsd] {:?}", this);
+        Ok(this)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SampleEntry {
+    pub kind: BoxType,
+    pub data_reference_index: u16,
+    pub data: Vec<u8>,
+}
+impl ReadFrom for SampleEntry {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(BoxHeader::read_from(&mut reader))?;
+
+        let mut reader = reader.take(u64::from(header.data_size()));
+        let _ = track_io!(reader.read_exact(&mut [0; 6][..]))?; // reserved
+        let data_reference_index = track_io!(reader.read_u16::<BigEndian>())?;
+        let mut data = Vec::new();
+        track_io!(reader.read_to_end(&mut data))?;
+
+        Ok(SampleEntry {
+            kind: header.kind,
+            data_reference_index,
+            data,
+        })
+    }
+}
+
+/// 8.6.1.2 Decoding Time to Sample Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SttsBox {
+    pub entries: Vec<SttsEntry>,
+}
+impl ReadFrom for SttsBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::Unsupported);
+
+        let entry_count = track_io!(reader.read_u32::<BigEndian>())?;
+        let mut entries = Vec::with_capacity(entry_count as usize);
+        for _ in 0..entry_count {
+            let sample_count = track_io!(reader.read_u32::<BigEndian>())?;
+            let sample_delta = track_io!(reader.read_u32::<BigEndian>())?;
+            entries.push(SttsEntry {
+                sample_count,
+                sample_delta,
+            });
+        }
+        let this = SttsBox { entries };
+        println!("                    [stts] {:?}", this);
+        Ok(this)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SttsEntry {
+    pub sample_count: u32,
+    pub sample_delta: u32,
+}
+
+/// 8.7.4 Sample To Chunk Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StscBox {
+    pub entries: Vec<StscEntry>,
+}
+impl ReadFrom for StscBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::Unsupported);
+
+        let entry_count = track_io!(reader.read_u32::<BigEndian>())?;
+        let mut entries = Vec::with_capacity(entry_count as usize);
+        for _ in 0..entry_count {
+            let first_chunk = track_io!(reader.read_u32::<BigEndian>())?;
+            let samples_per_chunk = track_io!(reader.read_u32::<BigEndian>())?;
+            let sample_description_index = track_io!(reader.read_u32::<BigEndian>())?;
+            entries.push(StscEntry {
+                first_chunk,
+                samples_per_chunk,
+                sample_description_index,
+            });
+        }
+        let this = StscBox { entries };
+        println!("                    [stsc] {:?}", this);
+        Ok(this)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StscEntry {
+    pub first_chunk: u32,
+    pub samples_per_chunk: u32,
+    pub sample_description_index: u32,
+}
+
+/// 8.7.3 Sample Size Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StszBox {
+    pub sample_size: u32,
+    pub sample_count: u32,
+    pub entry_sizes: Vec<u32>,
+}
+impl ReadFrom for StszBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::Unsupported);
+
+        let sample_size = track_io!(reader.read_u32::<BigEndian>())?;
+        let sample_count = track_io!(reader.read_u32::<BigEndian>())?;
+
+        let mut entry_sizes = Vec::new();
+        if sample_size == 0 {
+            for _ in 0..sample_count {
+                entry_sizes.push(track_io!(reader.read_u32::<BigEndian>())?);
+            }
+        }
+        let this = StszBox {
+            sample_size,
+            sample_count,
+            entry_sizes,
+        };
+        println!("                    [stsz] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 8.7.5 Chunk Offset Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StcoBox {
+    pub chunk_offsets: Vec<u32>,
+}
+impl ReadFrom for StcoBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::Unsupported);
+
+        let entry_count = track_io!(reader.read_u32::<BigEndian>())?;
+        let mut chunk_offsets = Vec::with_capacity(entry_count as usize);
+        for _ in 0..entry_count {
+            chunk_offsets.push(track_io!(reader.read_u32::<BigEndian>())?);
+        }
+        let this = StcoBox { chunk_offsets };
+        println!("                    [stco] {:?}", this);
+        Ok(this)
     }
 }

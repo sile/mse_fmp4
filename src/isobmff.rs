@@ -139,13 +139,14 @@ pub struct File {
     pub ftyp_box: FileTypeBox,
     pub moov_box: MoovBox,
     pub mdat_boxes: Vec<MediaDataBox>,
+    pub mfra_box: Option<MfraBox>,
 }
 impl File {
     pub fn read_from<R: Read>(reader: R) -> Result<Self> {
         let mut ftyp_box = None;
         let mut moov_box = None;
         let mut mdat_boxes = Vec::new();
-
+        let mut mfra_box = None;
         track!(each_boxes(reader, |kind, reader| match &kind.0 {
             b"ftyp" => {
                 track_assert!(ftyp_box.is_none(), ErrorKind::InvalidInput);
@@ -167,6 +168,7 @@ impl File {
                 mdat_boxes.push(x);
                 Ok(())
             }
+            b"mfra" => read_exactly_one(reader, &mut mfra_box),
             _ => {
                 println!("[todo] {:?}", kind);
                 track_io!(reader.read_to_end(&mut Vec::new()))?;
@@ -180,6 +182,7 @@ impl File {
             ftyp_box,
             moov_box,
             mdat_boxes,
+            mfra_box,
         })
     }
 }
@@ -1057,4 +1060,115 @@ pub struct ElstEntry {
     pub media_time: i64,
     pub media_rate_integer: i16,
     pub media_rate_fraction: i16,
+}
+
+/// 8.8.9 Movie Fragment Random Access Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MfraBox {
+    tfra_boxes: Vec<TfraBox>,
+    mfro_box: MfroBox,
+}
+impl ReadFrom for MfraBox {
+    fn read_from<R: Read>(reader: R) -> Result<Self> {
+        println!("[mfra]");
+
+        let mut tfra_boxes = Vec::new();
+        let mut mfro_box = None;
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"tfra" => {
+                tfra_boxes.push(track!(TfraBox::read_from(reader))?);
+                Ok(())
+            }
+            b"mfro" => track!(read_exactly_one(reader, &mut mfro_box)),
+            _ => {
+                println!("    [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+
+        let mfro_box = track_assert_some!(mfro_box, ErrorKind::InvalidInput);
+        Ok(MfraBox {
+            tfra_boxes,
+            mfro_box,
+        })
+    }
+}
+
+/// 8.8.10 Track Fragment Random Access Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TfraBox {
+    pub track_id: u32,
+    pub entries: Vec<TfraEntry>,
+}
+impl ReadFrom for TfraBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+
+        let track_id = track_io!(reader.read_u32::<BigEndian>())?;
+        let _ = track_io!(reader.read_exact(&mut [0; 3][..]))?; // reserved
+
+        let b = track_io!(reader.read_u8())?;
+        let length_size_of_traf_num = (b >> 4) & 0b11;
+        let length_size_of_trun_num = (b >> 2) & 0b11;
+        let length_size_of_sample_num = b & 0b11;
+
+        let traf_num_size = (length_size_of_traf_num + 1) as usize;
+        let trun_num_size = (length_size_of_trun_num + 1) as usize;
+        let sample_num_size = (length_size_of_sample_num + 1) as usize;
+
+        let number_of_entry = track_io!(reader.read_u32::<BigEndian>())?;
+        let mut entries = Vec::with_capacity(number_of_entry as usize);
+        for _ in 0..number_of_entry {
+            let time;
+            let moof_offset;
+            if header.version == 0 {
+                time = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+                moof_offset = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+            } else {
+                track_assert_eq!(header.version, 1, ErrorKind::InvalidInput);
+                time = track_io!(reader.read_u64::<BigEndian>())?;
+                moof_offset = track_io!(reader.read_u64::<BigEndian>())?;
+            }
+            let traf_number = track_io!(reader.read_uint::<BigEndian>(traf_num_size))? as u32;
+            let trun_number = track_io!(reader.read_uint::<BigEndian>(trun_num_size))? as u32;
+            let sample_number = track_io!(reader.read_uint::<BigEndian>(sample_num_size))? as u32;
+
+            entries.push(TfraEntry {
+                time,
+                moof_offset,
+                traf_number,
+                trun_number,
+                sample_number,
+            });
+        }
+
+        let this = TfraBox { track_id, entries };
+        println!("    [tfra] {:?}", this);
+        Ok(this)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TfraEntry {
+    pub time: u64,
+    pub moof_offset: u64,
+    pub traf_number: u32,
+    pub trun_number: u32,
+    pub sample_number: u32,
+}
+
+/// 8.8.11 Movie Fragment Random Access Offset Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MfroBox {
+    pub size: u32,
+}
+impl ReadFrom for MfroBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let _header = track!(FullBoxHeader::read_from(&mut reader))?;
+        let size = track_io!(reader.read_u32::<BigEndian>())?;
+        let this = MfroBox { size };
+        println!("    [mfro] {:?}", this);
+        Ok(this)
+    }
 }

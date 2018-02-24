@@ -139,6 +139,7 @@ pub struct File {
     pub ftyp_box: FileTypeBox,
     pub moov_box: MoovBox,
     pub mdat_boxes: Vec<MediaDataBox>,
+    pub moof_boxes: Vec<MoofBox>,
     pub mfra_box: Option<MfraBox>,
 }
 impl File {
@@ -146,6 +147,7 @@ impl File {
         let mut ftyp_box = None;
         let mut moov_box = None;
         let mut mdat_boxes = Vec::new();
+        let mut moof_boxes = Vec::new();
         let mut mfra_box = None;
         track!(each_boxes(reader, |kind, reader| match &kind.0 {
             b"ftyp" => {
@@ -168,6 +170,10 @@ impl File {
                 mdat_boxes.push(x);
                 Ok(())
             }
+            b"moof" => {
+                moof_boxes.push(track!(MoofBox::read_from(reader))?);
+                Ok(())
+            }
             b"mfra" => read_exactly_one(reader, &mut mfra_box),
             _ => {
                 println!("[todo] {:?}", kind);
@@ -182,6 +188,7 @@ impl File {
             ftyp_box,
             moov_box,
             mdat_boxes,
+            moof_boxes,
             mfra_box,
         })
     }
@@ -1169,6 +1176,257 @@ impl ReadFrom for MfroBox {
         let size = track_io!(reader.read_u32::<BigEndian>())?;
         let this = MfroBox { size };
         println!("    [mfro] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 8.8.4 Movie Fragment Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MoofBox {
+    pub mfhd_box: MfhdBox,
+    pub traf_boxes: Vec<TrafBox>,
+}
+impl ReadFrom for MoofBox {
+    fn read_from<R: Read>(reader: R) -> Result<Self> {
+        println!("[moof]");
+
+        let mut mfhd_box = None;
+        let mut traf_boxes = Vec::new();
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"mfhd" => track!(read_exactly_one(reader, &mut mfhd_box)),
+            b"traf" => {
+                traf_boxes.push(track!(TrafBox::read_from(reader))?);
+                Ok(())
+            }
+            _ => {
+                println!("    [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+
+        Ok(MoofBox {
+            mfhd_box: track_assert_some!(mfhd_box, ErrorKind::InvalidInput),
+            traf_boxes,
+        })
+    }
+}
+
+/// 8.8.5 Movie Fragment Header Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MfhdBox {
+    pub sequence_number: u32,
+}
+impl ReadFrom for MfhdBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let _header = track!(FullBoxHeader::read_from(&mut reader))?;
+        let sequence_number = track_io!(reader.read_u32::<BigEndian>())?;
+
+        let this = MfhdBox { sequence_number };
+        println!("    [mfhd] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 8.8.6 Track Fragment Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TrafBox {
+    pub tfhd_box: TfhdBox,
+    pub tfdt_box: Option<TfdtBox>,
+    pub trun_boxes: Vec<TrunBox>,
+}
+impl ReadFrom for TrafBox {
+    fn read_from<R: Read>(reader: R) -> Result<Self> {
+        println!("    [traf]");
+
+        let mut tfhd_box = None;
+        let mut tfdt_box = None;
+        let mut trun_boxes = Vec::new();
+        track!(each_boxes(reader, |kind, reader| match &kind.0 {
+            b"tfhd" => track!(read_exactly_one(reader, &mut tfhd_box)),
+            b"tfdt" => track!(read_exactly_one(reader, &mut tfdt_box)),
+            b"trun" => {
+                trun_boxes.push(track!(TrunBox::read_from(reader))?);
+                Ok(())
+            }
+            _ => {
+                println!("        [todo] {:?}", kind);
+                track_io!(reader.read_to_end(&mut Vec::new()))?;
+                Ok(())
+            }
+        }))?;
+
+        Ok(TrafBox {
+            tfhd_box: track_assert_some!(tfhd_box, ErrorKind::InvalidInput),
+            tfdt_box,
+            trun_boxes,
+        })
+    }
+}
+
+/// 8.8.7 Track Fragment Header Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TfhdBox {
+    pub track_id: u32,
+    pub duration_is_empty: bool,
+    pub default_base_is_moof: bool,
+    pub base_data_offset: Option<u64>,
+    pub sample_description_index: Option<u32>,
+    pub default_sample_duration: Option<u32>,
+    pub default_sample_size: Option<u32>,
+    pub default_sample_flags: Option<u32>,
+}
+impl ReadFrom for TfhdBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::InvalidInput);
+
+        let track_id = track_io!(reader.read_u32::<BigEndian>())?;
+        let duration_is_empty = (header.flags & 0x01_0000) != 0;
+        let default_base_is_moof = (header.flags & 0x02_0000) != 0;
+
+        let base_data_offset = if (header.flags & 0x00_0001) != 0 {
+            Some(track_io!(reader.read_u64::<BigEndian>())?)
+        } else {
+            None
+        };
+        let sample_description_index = if (header.flags & 0x00_0002) != 0 {
+            Some(track_io!(reader.read_u32::<BigEndian>())?)
+        } else {
+            None
+        };
+        let default_sample_duration = if (header.flags & 0x00_0008) != 0 {
+            Some(track_io!(reader.read_u32::<BigEndian>())?)
+        } else {
+            None
+        };
+        let default_sample_size = if (header.flags & 0x00_0010) != 0 {
+            Some(track_io!(reader.read_u32::<BigEndian>())?)
+        } else {
+            None
+        };
+        let default_sample_flags = if (header.flags & 0x00_0020) != 0 {
+            Some(track_io!(reader.read_u32::<BigEndian>())?)
+        } else {
+            None
+        };
+
+        let this = TfhdBox {
+            track_id,
+            duration_is_empty,
+            default_base_is_moof,
+            base_data_offset,
+            sample_description_index,
+            default_sample_duration,
+            default_sample_size,
+            default_sample_flags,
+        };
+        println!("        [tfhd] {:?}", this);
+        Ok(this)
+    }
+}
+
+/// 8.8.8 Track Run Box
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TrunBox {
+    pub data_offset: Option<i32>,
+    pub first_sample_flags: Option<u32>,
+    pub entries: Vec<TrunEntry>,
+}
+impl ReadFrom for TrunBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+        track_assert_eq!(header.version, 0, ErrorKind::InvalidInput);
+
+        let sample_count = track_io!(reader.read_u32::<BigEndian>())?;
+        let data_offset = if (header.flags & 0x00_0001) != 0 {
+            Some(track_io!(reader.read_i32::<BigEndian>())?)
+        } else {
+            None
+        };
+        let first_sample_flags = if (header.flags & 0x00_0004) != 0 {
+            Some(track_io!(reader.read_u32::<BigEndian>())?)
+        } else {
+            None
+        };
+
+        let mut entries = Vec::with_capacity(sample_count as usize);
+        for _ in 0..sample_count {
+            let sample_duration = if (header.flags & 0x00_0100) != 0 {
+                Some(track_io!(reader.read_u32::<BigEndian>())?)
+            } else {
+                None
+            };
+            let sample_size = if (header.flags & 0x00_0200) != 0 {
+                Some(track_io!(reader.read_u32::<BigEndian>())?)
+            } else {
+                None
+            };
+            let sample_flags = if (header.flags & 0x00_0400) != 0 {
+                Some(track_io!(reader.read_u32::<BigEndian>())?)
+            } else {
+                None
+            };
+            let sample_composition_time_offset = if (header.flags & 0x00_0800) != 0 {
+                if header.version == 0 {
+                    Some(i64::from(track_io!(reader.read_u32::<BigEndian>())?))
+                } else {
+                    Some(i64::from(track_io!(reader.read_i32::<BigEndian>())?))
+                }
+            } else {
+                None
+            };
+            entries.push(TrunEntry {
+                sample_duration,
+                sample_size,
+                sample_flags,
+                sample_composition_time_offset,
+            });
+        }
+
+        let this = TrunBox {
+            data_offset,
+            first_sample_flags,
+            entries,
+        };
+        println!(
+            "        [trun] data_offset={:?}, first_sample_flags={:?}, entries.len={}",
+            this.data_offset,
+            this.first_sample_flags,
+            this.entries.len()
+        );
+        Ok(this)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TrunEntry {
+    pub sample_duration: Option<u32>,
+    pub sample_size: Option<u32>,
+    pub sample_flags: Option<u32>,
+    pub sample_composition_time_offset: Option<i64>,
+}
+
+/// 8.8.12 Track fragment decode time
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TfdtBox {
+    pub base_media_decode_time: u64,
+}
+impl ReadFrom for TfdtBox {
+    fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let header = track!(FullBoxHeader::read_from(&mut reader))?;
+
+        let base_media_decode_time;
+        if header.version == 0 {
+            base_media_decode_time = u64::from(track_io!(reader.read_u32::<BigEndian>())?);
+        } else {
+            track_assert_eq!(header.version, 1, ErrorKind::InvalidInput);
+            base_media_decode_time = track_io!(reader.read_u64::<BigEndian>())?;
+        };
+        let this = TfdtBox {
+            base_media_decode_time,
+        };
+        println!("        [tfdt] {:?}", this);
         Ok(this)
     }
 }

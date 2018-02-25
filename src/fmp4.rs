@@ -174,13 +174,15 @@ impl WriteTo for TrackBox {
 #[derive(Debug)]
 pub struct MediaBox {
     pub mdhd_box: MediaHeaderBox,
-    pub hdlr_box: HandlerReferenceBox, // TODO: minf_box
+    pub hdlr_box: HandlerReferenceBox,
+    pub minf_box: MediaInformationBox,
 }
 impl MediaBox {
     pub fn new(is_video: bool) -> Self {
         MediaBox {
             mdhd_box: MediaHeaderBox::new(),
             hdlr_box: HandlerReferenceBox::new(is_video),
+            minf_box: MediaInformationBox::new(is_video),
         }
     }
 }
@@ -193,6 +195,185 @@ impl WriteTo for MediaBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.mdhd_box);
         write_box!(writer, self.hdlr_box);
+        write_box!(writer, self.minf_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MediaInformationBox {
+    pub vmhd_box: Option<VideoMediaHeaderBox>,
+    pub smhd_box: Option<SoundMediaHeaderBox>,
+    pub dinf_box: DataInformationBox,
+}
+impl MediaInformationBox {
+    pub fn new(is_video: bool) -> Self {
+        MediaInformationBox {
+            vmhd_box: if is_video {
+                Some(VideoMediaHeaderBox::new())
+            } else {
+                None
+            },
+            smhd_box: if !is_video {
+                Some(SoundMediaHeaderBox::new())
+            } else {
+                None
+            },
+            dinf_box: DataInformationBox::new(),
+        }
+    }
+}
+impl WriteBoxTo for MediaInformationBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"minf")
+    }
+}
+impl WriteTo for MediaInformationBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        if let Some(ref x) = self.vmhd_box {
+            write_box!(writer, x);
+        }
+        if let Some(ref x) = self.smhd_box {
+            write_box!(writer, x);
+        }
+        write_box!(writer, self.dinf_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct DataInformationBox {
+    pub dref_box: DataReferenceBox,
+}
+impl DataInformationBox {
+    pub fn new() -> Self {
+        DataInformationBox {
+            dref_box: DataReferenceBox::new(),
+        }
+    }
+}
+impl WriteBoxTo for DataInformationBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"dinf")
+    }
+}
+impl WriteTo for DataInformationBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_box!(writer, self.dref_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct DataReferenceBox {
+    pub url_box: DataEntryUrlBox,
+}
+impl DataReferenceBox {
+    pub fn new() -> Self {
+        DataReferenceBox {
+            url_box: DataEntryUrlBox::new(),
+        }
+    }
+}
+impl WriteBoxTo for DataReferenceBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"dref")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for DataReferenceBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, 1);
+        write_box!(writer, self.url_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct DataEntryUrlBox {
+    pub location: Option<CString>,
+}
+impl DataEntryUrlBox {
+    pub fn new() -> Self {
+        DataEntryUrlBox { location: None }
+    }
+}
+impl WriteBoxTo for DataEntryUrlBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"url ")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        let flags = if self.location.is_some() {
+            0
+        } else {
+            0x00_0001
+        };
+        Some(FullBoxHeader::new(0, flags))
+    }
+}
+impl WriteTo for DataEntryUrlBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        if let Some(ref x) = self.location {
+            write_all!(writer, x.as_bytes_with_nul());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct VideoMediaHeaderBox {
+    pub graphicsmode: u16,
+    pub opcolor: [u16; 3],
+}
+impl VideoMediaHeaderBox {
+    pub fn new() -> Self {
+        VideoMediaHeaderBox {
+            graphicsmode: 0,
+            opcolor: [0, 0, 0],
+        }
+    }
+}
+impl WriteBoxTo for VideoMediaHeaderBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"vmhd")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 1))
+    }
+}
+impl WriteTo for VideoMediaHeaderBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u16!(writer, self.graphicsmode);
+        for &x in &self.opcolor {
+            write_u16!(writer, x);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct SoundMediaHeaderBox {
+    pub balance: i16,
+}
+impl SoundMediaHeaderBox {
+    pub fn new() -> Self {
+        SoundMediaHeaderBox { balance: 0 }
+    }
+}
+impl WriteBoxTo for SoundMediaHeaderBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"smhd")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for SoundMediaHeaderBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_i16!(writer, self.balance);
+        write_zeroes!(writer, 2);
         Ok(())
     }
 }

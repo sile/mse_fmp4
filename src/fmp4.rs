@@ -66,7 +66,7 @@ pub trait WriteTo {
 
 pub trait WriteBoxTo: WriteTo {
     fn box_type(&self) -> BoxType;
-    fn box_header(&self) -> BoxHeader {
+    fn box_size(&self) -> u32 {
         let mut writer = WriteBytesCounter::new();
         track_try_unwrap!(self.write_to(&mut writer));
 
@@ -74,9 +74,12 @@ pub trait WriteBoxTo: WriteTo {
         if self.full_box_header().is_some() {
             size += 4;
         }
+        size
+    }
+    fn box_header(&self) -> BoxHeader {
         BoxHeader {
             kind: self.box_type(),
-            size,
+            size: self.box_size(),
         }
     }
     fn full_box_header(&self) -> Option<FullBoxHeader> {
@@ -96,22 +99,56 @@ pub trait WriteBoxTo: WriteTo {
 pub struct File {
     pub ftyp_box: FileTypeBox,
     pub moov_box: MovieBox,
+    // TODO:
     // pub mdat_boxes: Vec<MediaDataBox>,
     // pub moof_boxes: Vec<MoofBox>,
-    // pub mfra_box: Option<MfraBox>,
+    pub mfra_box: MovieFragmentRandomAccessBox,
 }
 impl File {
     pub fn new() -> File {
         File {
             ftyp_box: FileTypeBox::default(),
             moov_box: MovieBox::new(),
+            mfra_box: MovieFragmentRandomAccessBox::new(),
         }
     }
 }
 impl WriteTo for File {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        track!(self.ftyp_box.write_box_to(&mut writer))?;
-        track!(self.moov_box.write_box_to(&mut writer))?;
+        write_box!(writer, self.ftyp_box);
+        write_box!(writer, self.moov_box);
+        write_box!(writer, self.mfra_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MovieFragmentRandomAccessBox {
+    pub mfro_box: MovieFragmentRandomAccessOffsetBox,
+    // TOOD(?): tfra_boxes
+}
+impl MovieFragmentRandomAccessBox {
+    pub fn new() -> Self {
+        MovieFragmentRandomAccessBox {
+            mfro_box: MovieFragmentRandomAccessOffsetBox::new(),
+        }
+    }
+}
+impl WriteBoxTo for MovieFragmentRandomAccessBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"mfra")
+    }
+    fn box_size(&self) -> u32 {
+        let mut writer = WriteBytesCounter::new();
+        track_try_unwrap!(self.mfro_box.write_box_to(&mut writer));
+        8 + writer.count() as u32
+    }
+}
+impl WriteTo for MovieFragmentRandomAccessBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        let mut mfro_box = self.mfro_box.clone();
+        mfro_box.size = self.box_size();
+        write_box!(writer, mfro_box);
         Ok(())
     }
 }
@@ -412,6 +449,32 @@ impl WriteTo for SampleEntry {
         write_zeroes!(writer, 6);
         write_u16!(writer, self.data_reference_index);
         write_all!(writer, &self.data);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MovieFragmentRandomAccessOffsetBox {
+    pub size: u32,
+}
+impl MovieFragmentRandomAccessOffsetBox {
+    pub fn new() -> Self {
+        MovieFragmentRandomAccessOffsetBox{
+            size: 0 // NOTE
+        }
+    }
+}
+impl WriteBoxTo for MovieFragmentRandomAccessOffsetBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"mfro")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for MovieFragmentRandomAccessOffsetBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, self.size);
         Ok(())
     }
 }

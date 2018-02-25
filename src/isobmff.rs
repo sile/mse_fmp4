@@ -1,11 +1,12 @@
 use std::ffi::CString;
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::str;
-use byteorder::{BigEndian, ReadBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use trackable::error::ErrorKindExt;
 
 use {ErrorKind, Result};
+use fmp4::WriteTo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BoxHeader {
@@ -31,6 +32,18 @@ impl BoxHeader {
         self.size - Self::SIZE
     }
 }
+impl WriteTo for BoxHeader {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        track_assert_ne!(self.size, 1, ErrorKind::Unsupported);
+        track_assert_ne!(self.size, 0, ErrorKind::Unsupported);
+        track_assert!(self.size >= Self::SIZE, ErrorKind::InvalidInput);
+        track_assert_ne!(self.kind.0, *b"uuid", ErrorKind::Unsupported);
+
+        track_io!(writer.write_u32::<BigEndian>(self.size))?;
+        track_io!(writer.write_all(&self.kind.0))?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FullBoxHeader {
@@ -38,11 +51,21 @@ pub struct FullBoxHeader {
     pub flags: u32, // u24
 }
 impl FullBoxHeader {
+    pub fn new(version: u8, flags: u32) -> Self {
+        FullBoxHeader { version, flags }
+    }
     pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
         let n = track_io!(reader.read_u32::<BigEndian>())?;
         let version = (n >> 24) as u8;
         let flags = n & 0xFF_FFFF;
         Ok(FullBoxHeader { version, flags })
+    }
+}
+impl WriteTo for FullBoxHeader {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        track_io!(writer.write_u8(self.version))?;
+        track_io!(writer.write_uint::<BigEndian>(u64::from(self.flags), 3))?;
+        Ok(())
     }
 }
 

@@ -303,13 +303,46 @@ impl WriteBoxTo for TrackRunBox {
         BoxType(*b"trun")
     }
     fn full_box_header(&self) -> Option<FullBoxHeader> {
-        let flags = unimplemented!();
+        let head = self.entries.first().unwrap_or_else(|| &TrunEntry {
+            sample_duration: None,
+            sample_size: None,
+            sample_flags: None,
+            sample_composition_time_offset: None,
+        });
+        let flags = (self.data_offset.is_some() as u32 * 0x00_0001)
+            | (self.first_sample_flags.is_some() as u32 * 0x00_0004)
+            | (head.sample_duration.is_some() as u32 * 0x00_0100)
+            | (head.sample_size.is_some() as u32 * 0x00_0200)
+            | (head.sample_flags.is_some() as u32 * 0x00_0400)
+            | (head.sample_composition_time_offset.is_some() as u32 * 0x00_0800);
         Some(FullBoxHeader::new(0, flags))
     }
 }
 impl WriteTo for TrackRunBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        unimplemented!()
+        write_u32!(writer, self.entries.len() as u32);
+        if let Some(x) = self.data_offset {
+            write_i32!(writer, x);
+        }
+        if let Some(x) = self.first_sample_flags {
+            write_u32!(writer, x);
+        }
+        for e in &self.entries {
+            // TODO: check flags
+            if let Some(x) = e.sample_duration {
+                write_u32!(writer, x);
+            }
+            if let Some(x) = e.sample_size {
+                write_u32!(writer, x);
+            }
+            if let Some(x) = e.sample_flags {
+                write_u32!(writer, x);
+            }
+            if let Some(x) = e.sample_composition_time_offset {
+                write_u32!(writer, x);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -318,7 +351,7 @@ pub struct TrunEntry {
     pub sample_duration: Option<u32>,
     pub sample_size: Option<u32>,
     pub sample_flags: Option<u32>,
-    pub sample_composition_time_offset: Option<i64>,
+    pub sample_composition_time_offset: Option<u32>,
 }
 
 #[derive(Debug)]

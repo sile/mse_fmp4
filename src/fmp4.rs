@@ -1,15 +1,16 @@
+use std::ffi::CString;
 use std::io::{self, Write};
 use byteorder::{BigEndian, WriteBytesExt};
 
-use Result;
-use isobmff::{BoxHeader, BoxType, Brand, FullBoxHeader};
+use {ErrorKind, Result};
+use isobmff::{BoxHeader, BoxType, Brand, FullBoxHeader, HandlerType};
 
 // macro_rules! write_u8 {
 //     ($w:expr, $n:expr) => { track_io!($w.write_u8($n))?; }
 // }
-// macro_rules! write_u16 {
-//     ($w:expr, $n:expr) => { track_io!($w.write_u16::<BigEndian>($n))?; }
-// }
+macro_rules! write_u16 {
+    ($w:expr, $n:expr) => { track_io!($w.write_u16::<BigEndian>($n))?; }
+}
 macro_rules! write_i16 {
     ($w:expr, $n:expr) => { track_io!($w.write_i16::<BigEndian>($n))?; }
 }
@@ -30,6 +31,13 @@ macro_rules! write_zeroes {
 }
 macro_rules! write_box {
     ($w:expr, $b:expr) => { track!($b.write_box_to(&mut $w))?; }
+}
+macro_rules! write_boxes {
+    ($w:expr, $bs:expr) => {
+        for b in $bs {
+            track!(b.write_box_to(&mut $w))?;
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -111,11 +119,14 @@ impl WriteTo for File {
 #[derive(Debug)]
 pub struct MovieBox {
     pub mvhd_box: MovieHeaderBox,
+    pub trak_boxes: Vec<TrackBox>, // TODO
+                                   //pub mvex_box: MvexBox
 }
 impl MovieBox {
     pub fn new() -> Self {
         MovieBox {
             mvhd_box: MovieHeaderBox::new(),
+            trak_boxes: Vec::new(),
         }
     }
 }
@@ -126,7 +137,202 @@ impl WriteBoxTo for MovieBox {
 }
 impl WriteTo for MovieBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        track_assert!(!self.trak_boxes.is_empty(), ErrorKind::InvalidInput);
+
         write_box!(writer, self.mvhd_box);
+        write_boxes!(writer, &self.trak_boxes);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct TrackBox {
+    pub tkhd_box: TrackHeaderBox,
+    pub mdia_box: MediaBox,
+}
+impl TrackBox {
+    pub fn new(is_video: bool) -> Self {
+        TrackBox {
+            tkhd_box: TrackHeaderBox::new(is_video),
+            mdia_box: MediaBox::new(is_video),
+        }
+    }
+}
+impl WriteBoxTo for TrackBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"trak")
+    }
+}
+impl WriteTo for TrackBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_box!(writer, self.tkhd_box);
+        write_box!(writer, self.mdia_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MediaBox {
+    pub mdhd_box: MediaHeaderBox,
+    pub hdlr_box: HandlerReferenceBox, // TODO: minf_box
+}
+impl MediaBox {
+    pub fn new(is_video: bool) -> Self {
+        MediaBox {
+            mdhd_box: MediaHeaderBox::new(),
+            hdlr_box: HandlerReferenceBox::new(is_video),
+        }
+    }
+}
+impl WriteBoxTo for MediaBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"mdia")
+    }
+}
+impl WriteTo for MediaBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_box!(writer, self.mdhd_box);
+        write_box!(writer, self.hdlr_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MediaHeaderBox {
+    pub creation_time: u32,
+    pub modification_time: u32,
+    pub timescale: u32,
+    pub duration: u32,
+    pub language: u16,
+}
+impl MediaHeaderBox {
+    pub fn new() -> Self {
+        MediaHeaderBox {
+            creation_time: 0,
+            modification_time: 0,
+            timescale: 0, // FIXME
+            duration: 1,  // FIXME
+            language: 21956,
+        }
+    }
+}
+impl WriteBoxTo for MediaHeaderBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"mdhd")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for MediaHeaderBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, self.creation_time);
+        write_u32!(writer, self.modification_time);
+        write_u32!(writer, self.timescale);
+        write_u32!(writer, self.duration);
+        write_u16!(writer, self.language);
+        write_zeroes!(writer, 2);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct HandlerReferenceBox {
+    pub handler_type: HandlerType,
+    pub name: CString,
+}
+impl HandlerReferenceBox {
+    pub fn new(is_video: bool) -> Self {
+        HandlerReferenceBox {
+            handler_type: HandlerType(if is_video { *b"vide" } else { *b"soun" }),
+            name: CString::new("A handler").expect("Never fails"),
+        }
+    }
+}
+impl WriteBoxTo for HandlerReferenceBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"hdlr")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for HandlerReferenceBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_zeroes!(writer, 4);
+        write_all!(writer, &self.handler_type.0);
+        write_zeroes!(writer, 4 * 3);
+        write_all!(writer, self.name.as_bytes_with_nul());
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct TrackHeaderBox {
+    pub track_enabled: bool,
+    pub track_in_movie: bool,
+    pub track_in_preview: bool,
+    pub track_size_is_aspect_ratio: bool,
+    pub creation_time: u32,
+    pub modification_time: u32,
+    pub track_id: u32,
+    pub duration: u32,
+    pub layer: i16,
+    pub alternate_group: i16,
+    pub volume: i16, // fixed point 8.8
+    pub matrix: [i32; 9],
+    pub width: u32,  // fixed point 16.16
+    pub height: u32, // fixed point 16.16
+}
+impl TrackHeaderBox {
+    pub fn new(is_video: bool) -> Self {
+        TrackHeaderBox {
+            track_enabled: true,
+            track_in_movie: true,
+            track_in_preview: true,
+            track_size_is_aspect_ratio: false,
+            creation_time: 0,
+            modification_time: 0,
+            track_id: if is_video { 1 } else { 2 },
+            duration: 1, // FIXME
+            layer: 0,
+            alternate_group: 0,
+            volume: if is_video { 0 } else { 256 },
+            matrix: [65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824],
+            width: 0,
+            height: 0,
+        }
+    }
+}
+impl WriteBoxTo for TrackHeaderBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"tkhd")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        let flags = (self.track_enabled as u32 * 0x00_0001)
+            | (self.track_in_movie as u32 * 0x00_0002)
+            | (self.track_in_preview as u32 * 0x00_0004)
+            | (self.track_size_is_aspect_ratio as u32 * 0x00_0008);
+        Some(FullBoxHeader::new(0, flags))
+    }
+}
+impl WriteTo for TrackHeaderBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, self.creation_time);
+        write_u32!(writer, self.modification_time);
+        write_u32!(writer, self.track_id);
+        write_zeroes!(writer, 4);
+        write_u32!(writer, self.duration);
+        write_zeroes!(writer, 4 * 2);
+        write_i16!(writer, self.layer);
+        write_i16!(writer, self.alternate_group);
+        write_i16!(writer, self.volume);
+        write_zeroes!(writer, 2);
+        for &x in &self.matrix {
+            write_i32!(writer, x);
+        }
+        write_u32!(writer, self.width);
+        write_u32!(writer, self.height);
         Ok(())
     }
 }
@@ -147,8 +353,8 @@ impl MovieHeaderBox {
         MovieHeaderBox {
             creation_time: 0,
             modification_time: 0,
-            timescale: 1, // TODO
-            duration: 1,  // TODO
+            timescale: 1, // FIXME
+            duration: 1,  // FIXME
             rate: 65536,
             volume: 256,
             matrix: [65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824],

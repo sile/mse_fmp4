@@ -107,6 +107,25 @@ impl fmt::Debug for Brand {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct HandlerType(pub [u8; 4]);
+impl HandlerType {
+    pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let mut buf = [0; 4];
+        track_io!(reader.read_exact(&mut buf[..]))?;
+        Ok(HandlerType(buf))
+    }
+}
+impl fmt::Debug for HandlerType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Ok(s) = str::from_utf8(&self.0) {
+            write!(f, "HandlerType(b{:?})", s)
+        } else {
+            write!(f, "HandlerType({:?})", self.0)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FileTypeBox {
     pub major_brand: Brand,
@@ -620,7 +639,7 @@ impl ReadFrom for MdhdBox {
 /// 8.4.3 Handler Reference Box
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HdlrBox {
-    pub handler_type: u32,
+    pub handler_type: HandlerType,
     pub name: CString,
 }
 impl ReadFrom for HdlrBox {
@@ -629,7 +648,7 @@ impl ReadFrom for HdlrBox {
         track_assert_eq!(header.version, 0, ErrorKind::Unsupported);
 
         let _ = track_io!(reader.read_u32::<BigEndian>())?; // pre_defined
-        let handler_type = track_io!(reader.read_u32::<BigEndian>())?;
+        let handler_type = track!(HandlerType::read_from(&mut reader))?;
         let _ = track_io!(reader.read_exact(&mut [0; 12][..]))?; // reserved
 
         let mut name = Vec::new();

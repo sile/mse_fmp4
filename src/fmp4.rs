@@ -99,8 +99,7 @@ pub trait WriteBoxTo: WriteTo {
 pub struct File {
     pub ftyp_box: FileTypeBox,
     pub moov_box: MovieBox,
-    // TODO:
-    // pub mdat_boxes: Vec<MediaDataBox>,
+    pub mdat_boxes: Vec<MediaDataBox>,
     // pub moof_boxes: Vec<MoofBox>,
     pub mfra_box: MovieFragmentRandomAccessBox,
 }
@@ -109,6 +108,7 @@ impl File {
         File {
             ftyp_box: FileTypeBox::default(),
             moov_box: MovieBox::new(),
+            mdat_boxes: Vec::new(),
             mfra_box: MovieFragmentRandomAccessBox::new(),
         }
     }
@@ -117,7 +117,24 @@ impl WriteTo for File {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.ftyp_box);
         write_box!(writer, self.moov_box);
+        write_boxes!(writer, &self.mdat_boxes);
         write_box!(writer, self.mfra_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MediaDataBox {
+    pub data: Vec<u8>,
+}
+impl WriteBoxTo for MediaDataBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"mdat")
+    }
+}
+impl WriteTo for MediaDataBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_all!(writer, &self.data);
         Ok(())
     }
 }

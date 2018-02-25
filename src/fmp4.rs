@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use byteorder::{BigEndian, WriteBytesExt};
 
 use {ErrorKind, Result};
-use isobmff::{BoxHeader, BoxType, Brand, FullBoxHeader, HandlerType};
+use isobmff::{BoxHeader, BoxType, Brand, FullBoxHeader, HandlerType, SampleEntry};
 
 // macro_rules! write_u8 {
 //     ($w:expr, $n:expr) => { track_io!($w.write_u8($n))?; }
@@ -205,6 +205,7 @@ pub struct MediaInformationBox {
     pub vmhd_box: Option<VideoMediaHeaderBox>,
     pub smhd_box: Option<SoundMediaHeaderBox>,
     pub dinf_box: DataInformationBox,
+    pub stbl_box: SampleTableBox,
 }
 impl MediaInformationBox {
     pub fn new(is_video: bool) -> Self {
@@ -220,6 +221,7 @@ impl MediaInformationBox {
                 None
             },
             dinf_box: DataInformationBox::new(),
+            stbl_box: SampleTableBox::new(),
         }
     }
 }
@@ -237,6 +239,151 @@ impl WriteTo for MediaInformationBox {
             write_box!(writer, x);
         }
         write_box!(writer, self.dinf_box);
+        write_box!(writer, self.stbl_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct SampleTableBox {
+    pub stsd_box: SampleDescriptionBox,
+    pub stts_box: TimeToSampleBox,
+    pub stsc_box: SampleToChunkBox,
+    pub stsz_box: SampleSizeBox,
+    pub stco_box: ChunkOffsetBox,
+}
+impl SampleTableBox {
+    pub fn new() -> Self {
+        SampleTableBox {
+            stsd_box: SampleDescriptionBox::new(),
+            stts_box: TimeToSampleBox,
+            stsc_box: SampleToChunkBox,
+            stsz_box: SampleSizeBox,
+            stco_box: ChunkOffsetBox,
+        }
+    }
+}
+impl WriteBoxTo for SampleTableBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"stbl")
+    }
+}
+impl WriteTo for SampleTableBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_box!(writer, self.stsd_box);
+        write_box!(writer, self.stts_box);
+        write_box!(writer, self.stsc_box);
+        write_box!(writer, self.stsz_box);
+        write_box!(writer, self.stco_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct SampleSizeBox;
+impl WriteBoxTo for SampleSizeBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"stsz")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for SampleSizeBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, 0);
+        write_u32!(writer, 0);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct TimeToSampleBox;
+impl WriteBoxTo for TimeToSampleBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"stts")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for TimeToSampleBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, 0);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct ChunkOffsetBox;
+impl WriteBoxTo for ChunkOffsetBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"stco")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for ChunkOffsetBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, 0);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct SampleToChunkBox;
+impl WriteBoxTo for SampleToChunkBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"stsc")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for SampleToChunkBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, 0);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct SampleDescriptionBox {
+    pub sample_entries: Vec<SampleEntry>,
+}
+impl SampleDescriptionBox {
+    pub fn new() -> Self {
+        SampleDescriptionBox {
+            sample_entries: Vec::new(), // FIXME
+        }
+    }
+}
+impl WriteBoxTo for SampleDescriptionBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"stsd")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for SampleDescriptionBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, self.sample_entries.len() as u32);
+        write_boxes!(writer, &self.sample_entries);
+        Ok(())
+    }
+}
+impl WriteBoxTo for SampleEntry {
+    fn box_type(&self) -> BoxType {
+        BoxType(self.format.0)
+    }
+}
+impl WriteTo for SampleEntry {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_zeroes!(writer, 6);
+        write_u16!(writer, self.data_reference_index);
+        write_all!(writer, &self.data);
         Ok(())
     }
 }

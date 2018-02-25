@@ -108,6 +108,25 @@ impl fmt::Debug for Brand {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SampleFormat(pub [u8; 4]);
+impl SampleFormat {
+    pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
+        let mut buf = [0; 4];
+        track_io!(reader.read_exact(&mut buf[..]))?;
+        Ok(SampleFormat(buf))
+    }
+}
+impl fmt::Debug for SampleFormat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Ok(s) = str::from_utf8(&self.0) {
+            write!(f, "SampleFormat(b{:?})", s)
+        } else {
+            write!(f, "SampleFormat({:?})", self.0)
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HandlerType(pub [u8; 4]);
 impl HandlerType {
     pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
@@ -901,7 +920,7 @@ impl ReadFrom for StsdBox {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SampleEntry {
-    pub kind: BoxType,
+    pub format: SampleFormat,
     pub data_reference_index: u16,
     pub data: Vec<u8>,
 }
@@ -916,7 +935,7 @@ impl ReadFrom for SampleEntry {
         track_io!(reader.read_to_end(&mut data))?;
 
         Ok(SampleEntry {
-            kind: header.kind,
+            format: SampleFormat(header.kind.0),
             data_reference_index,
             data,
         })

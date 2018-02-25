@@ -15,6 +15,9 @@ fn main() {
     t.tkhd_box.duration = 1 * Timestamp::RESOLUTION as u32; // TODO
     t.mdia_box.mdhd_box.timescale = Timestamp::RESOLUTION as u32;
     t.mdia_box.mdhd_box.duration = 1 * Timestamp::RESOLUTION as u32; // TODO
+
+    // TODO: t.mdia_box.minf_box.stbl_box.stsd_box.sample_entries.push(...);
+
     f.moov_box.trak_boxes.push(t);
 
     track_try_unwrap!(f.write_to(std::io::stdout()));

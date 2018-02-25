@@ -17,8 +17,12 @@ fn main() {
     t.mdia_box.mdhd_box.duration = 1 * Timestamp::RESOLUTION as u32; // TODO
 
     // TODO: t.mdia_box.minf_box.stbl_box.stsd_box.sample_entries.push(...);
-
     f.moov_box.trak_boxes.push(t);
 
+    f.moov_box.mvex_box.mehd_box.fragment_duration = 1 * Timestamp::RESOLUTION as u32; // TODO
+    f.moov_box
+        .mvex_box
+        .trex_boxes
+        .push(fmp4::TrackExtendsBox::new(1));
     track_try_unwrap!(f.write_to(std::io::stdout()));
 }

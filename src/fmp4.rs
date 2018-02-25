@@ -119,14 +119,15 @@ impl WriteTo for File {
 #[derive(Debug)]
 pub struct MovieBox {
     pub mvhd_box: MovieHeaderBox,
-    pub trak_boxes: Vec<TrackBox>, // TODO
-                                   //pub mvex_box: MvexBox
+    pub trak_boxes: Vec<TrackBox>,
+    pub mvex_box: MovieExtendsBox,
 }
 impl MovieBox {
     pub fn new() -> Self {
         MovieBox {
             mvhd_box: MovieHeaderBox::new(),
             trak_boxes: Vec::new(),
+            mvex_box: MovieExtendsBox::new(),
         }
     }
 }
@@ -141,6 +142,33 @@ impl WriteTo for MovieBox {
 
         write_box!(writer, self.mvhd_box);
         write_boxes!(writer, &self.trak_boxes);
+        write_box!(writer, self.mvex_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MovieExtendsBox {
+    pub mehd_box: MovieExtendsHeaderBox,
+    pub trex_boxes: Vec<TrackExtendsBox>,
+}
+impl MovieExtendsBox {
+    pub fn new() -> Self {
+        MovieExtendsBox {
+            mehd_box: MovieExtendsHeaderBox::new(),
+            trex_boxes: Vec::new(), // FIXME
+        }
+    }
+}
+impl WriteBoxTo for MovieExtendsBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"mvex")
+    }
+}
+impl WriteTo for MovieExtendsBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_box!(writer, self.mehd_box);
+        write_boxes!(writer, &self.trex_boxes);
         Ok(())
     }
 }
@@ -713,6 +741,70 @@ impl WriteTo for MovieHeaderBox {
         }
         write_zeroes!(writer, 4 * 6);
         write_u32!(writer, self.next_track_id);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MovieExtendsHeaderBox {
+    pub fragment_duration: u32,
+}
+impl MovieExtendsHeaderBox {
+    pub fn new() -> Self {
+        MovieExtendsHeaderBox {
+            fragment_duration: 1, // FIXME
+        }
+    }
+}
+impl WriteBoxTo for MovieExtendsHeaderBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"mehd")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for MovieExtendsHeaderBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, self.fragment_duration);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct TrackExtendsBox {
+    pub track_id: u32,
+    pub default_sample_description_index: u32,
+    pub default_sample_duration: u32,
+    pub default_sample_size: u32,
+    pub default_sample_flags: u32,
+}
+impl TrackExtendsBox {
+    pub fn new(track_id: u32) -> Self {
+        TrackExtendsBox {
+            track_id,
+            default_sample_description_index: 1,
+            default_sample_duration: 0,
+            default_sample_size: 0,
+            default_sample_flags: 0,
+        }
+    }
+}
+impl WriteBoxTo for TrackExtendsBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"trex")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for TrackExtendsBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, self.track_id);
+        write_u32!(writer, self.default_sample_description_index);
+        write_u32!(writer, self.default_sample_duration);
+        write_u32!(writer, self.default_sample_size);
+        write_u32!(writer, self.default_sample_flags);
         Ok(())
     }
 }

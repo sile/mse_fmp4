@@ -1,12 +1,15 @@
+extern crate clap;
 extern crate mpeg2ts;
 extern crate mse_fmp4;
 #[macro_use]
 extern crate trackable;
 
 use std::collections::HashMap;
-use std::io::Read;
-// use mpeg2ts::time::Timestamp;
-// use mse_fmp4::fmp4::{self, WriteTo};
+use std::fs::File;
+use std::io::{Read, Write};
+use clap::{App, Arg};
+use mpeg2ts::time::Timestamp;
+use mse_fmp4::fmp4::{self, WriteTo};
 use mse_fmp4::avc;
 use mse_fmp4::ErrorKind;
 use mpeg2ts::pes::{PesPacket, PesPacketReader, ReadPesPacket};
@@ -19,6 +22,14 @@ struct AvcStream {
     width: Option<usize>,
     height: Option<usize>,
     packets: Vec<PesPacket<Vec<u8>>>,
+}
+impl AvcStream {
+    fn duration(&self) -> u64 {
+        // TODO:
+        let start = self.packets.first().unwrap().header.pts.unwrap().as_u64();
+        let end = self.packets.last().unwrap().header.pts.unwrap().as_u64();
+        end - start
+    }
 }
 
 fn read_avc_stream() -> mse_fmp4::Result<AvcStream> {
@@ -95,28 +106,74 @@ fn read_avc_stream() -> mse_fmp4::Result<AvcStream> {
 }
 
 fn main() {
-    // let mut f = fmp4::File::new();
-    // f.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
-    // f.moov_box.mvhd_box.duration = 1 * Timestamp::RESOLUTION as u32; // TODO
-
-    // let mut t = fmp4::TrackBox::new(true);
-    // t.tkhd_box.duration = 1 * Timestamp::RESOLUTION as u32; // TODO
-    // t.mdia_box.mdhd_box.timescale = Timestamp::RESOLUTION as u32;
-    // t.mdia_box.mdhd_box.duration = 1 * Timestamp::RESOLUTION as u32; // TODO
-
-    // // TODO: t.mdia_box.minf_box.stbl_box.stsd_box.sample_entries.push(...);
-    // f.moov_box.trak_boxes.push(t);
-
-    // f.moov_box.mvex_box.mehd_box.fragment_duration = 1 * Timestamp::RESOLUTION as u32; // TODO
-    // f.moov_box
-    //     .mvex_box
-    //     .trex_boxes
-    //     .push(fmp4::TrackExtendsBox::new(1));
-    // track_try_unwrap!(f.write_to(std::io::stdout()));
+    let matches = App::new("ts_to_fmp4")
+        .arg(
+            Arg::with_name("OUTPUT_FILE_PREFIX")
+                .long("output-file-prefix")
+                .takes_value(true)
+                .default_value("movie"),
+        )
+        .get_matches();
+    let output_file_prefix = matches.value_of("OUTPUT_FILE_PREFIX").unwrap();
 
     let avc_stream = track_try_unwrap!(read_avc_stream());
-    println!("# {:?}", avc_stream.decoder_configuration_record);
-    println!("# {:?}, {:?}", avc_stream.width, avc_stream.height);
+    writeln!(
+        std::io::stderr(),
+        "# {:?}",
+        avc_stream.decoder_configuration_record
+    ).unwrap();
+    writeln!(
+        std::io::stderr(),
+        "# {:?}, {:?}",
+        avc_stream.width,
+        avc_stream.height
+    ).unwrap();
+
+    let mut f = fmp4::File::new();
+    let video_duration = avc_stream.duration();
+    writeln!(
+        std::io::stderr(),
+        "# DURATION: {}",
+        video_duration as f64 / Timestamp::RESOLUTION as f64,
+    ).unwrap();
+    f.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
+    f.moov_box.mvhd_box.duration = video_duration * Timestamp::RESOLUTION;
+
+    let mut t = fmp4::TrackBox::new(true);
+    t.tkhd_box.width = (avc_stream.width.unwrap() as u32) << 16;
+    t.tkhd_box.height = (avc_stream.height.unwrap() as u32) << 16;
+    t.tkhd_box.duration = video_duration * Timestamp::RESOLUTION;
+    t.mdia_box.mdhd_box.timescale = Timestamp::RESOLUTION as u32;
+    t.mdia_box.mdhd_box.duration = video_duration * Timestamp::RESOLUTION;
+
+    let avc_sample_entry = fmp4::AvcSampleEntry {
+        width: avc_stream.width.unwrap() as u16,
+        height: avc_stream.height.unwrap() as u16,
+        avcc_box: fmp4::AvcConfigurationBox {
+            config: avc_stream.decoder_configuration_record.clone().unwrap(),
+        },
+    };
+    t.mdia_box
+        .minf_box
+        .stbl_box
+        .stsd_box
+        .sample_entries
+        .push(track_try_unwrap!(avc_sample_entry.to_sample_entry()));
+
+    f.moov_box.trak_boxes.push(t);
+
+    f.moov_box.mvex_box.mehd_box.fragment_duration = video_duration * Timestamp::RESOLUTION;
+    f.moov_box
+        .mvex_box
+        .trex_boxes
+        .push(fmp4::TrackExtendsBox::new(1));
+    {
+        let out = track_try_unwrap!(
+            File::create(format!("{}-init.mp4", output_file_prefix))
+                .map_err(|e| ErrorKind::Other.cause(e))
+        );
+        track_try_unwrap!(f.write_to(out))
+    }
 }
 
 struct MyTsPacketReader<R> {

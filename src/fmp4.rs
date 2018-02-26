@@ -671,6 +671,50 @@ impl WriteTo for SampleToChunkBox {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AvcConfigurationBox {
+    pub config: ::avc::AvcDecoderConfigurationRecord,
+}
+impl WriteBoxTo for AvcConfigurationBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"avcC")
+    }
+}
+impl WriteTo for AvcConfigurationBox {
+    fn write_to<W: Write>(&self, writer: W) -> Result<()> {
+        track!(self.config.write_to(writer))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AvcSampleEntry {
+    pub width: u16,
+    pub height: u16,
+    pub avcc_box: AvcConfigurationBox,
+}
+impl AvcSampleEntry {
+    pub fn to_sample_entry(&self) -> Result<SampleEntry> {
+        use isobmff::SampleFormat;
+        let mut data = Vec::new();
+        write_zeroes!(&mut data, 16);
+        write_u16!(&mut data, self.width);
+        write_u16!(&mut data, self.height);
+        write_u32!(&mut data, 0x0048_0000);
+        write_u32!(&mut data, 0x0048_0000);
+        write_zeroes!(&mut data, 4);
+        write_u16!(&mut data, 1);
+        write_zeroes!(&mut data, 32);
+        write_u16!(&mut data, 0x0018);
+        write_i16!(&mut data, -1);
+        write_box!(&mut data, self.avcc_box);
+        Ok(SampleEntry {
+            format: SampleFormat(*b"avc1"),
+            data_reference_index: 1,
+            data,
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct SampleDescriptionBox {
     pub sample_entries: Vec<SampleEntry>,
@@ -876,10 +920,10 @@ impl WriteTo for SoundMediaHeaderBox {
 
 #[derive(Debug)]
 pub struct MediaHeaderBox {
-    pub creation_time: u32,
-    pub modification_time: u32,
+    pub creation_time: u64,
+    pub modification_time: u64,
     pub timescale: u32,
-    pub duration: u32,
+    pub duration: u64,
     pub language: u16,
 }
 impl MediaHeaderBox {
@@ -898,15 +942,15 @@ impl WriteBoxTo for MediaHeaderBox {
         BoxType(*b"mdhd")
     }
     fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
+        Some(FullBoxHeader::new(1, 0))
     }
 }
 impl WriteTo for MediaHeaderBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u32!(writer, self.creation_time);
-        write_u32!(writer, self.modification_time);
+        write_u64!(writer, self.creation_time);
+        write_u64!(writer, self.modification_time);
         write_u32!(writer, self.timescale);
-        write_u32!(writer, self.duration);
+        write_u64!(writer, self.duration);
         write_u16!(writer, self.language);
         write_zeroes!(writer, 2);
         Ok(())
@@ -950,10 +994,10 @@ pub struct TrackHeaderBox {
     pub track_in_movie: bool,
     pub track_in_preview: bool,
     pub track_size_is_aspect_ratio: bool,
-    pub creation_time: u32,
-    pub modification_time: u32,
+    pub creation_time: u64,
+    pub modification_time: u64,
     pub track_id: u32,
-    pub duration: u32,
+    pub duration: u64,
     pub layer: i16,
     pub alternate_group: i16,
     pub volume: i16, // fixed point 8.8
@@ -990,16 +1034,16 @@ impl WriteBoxTo for TrackHeaderBox {
             | (self.track_in_movie as u32 * 0x00_0002)
             | (self.track_in_preview as u32 * 0x00_0004)
             | (self.track_size_is_aspect_ratio as u32 * 0x00_0008);
-        Some(FullBoxHeader::new(0, flags))
+        Some(FullBoxHeader::new(1, flags))
     }
 }
 impl WriteTo for TrackHeaderBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u32!(writer, self.creation_time);
-        write_u32!(writer, self.modification_time);
+        write_u64!(writer, self.creation_time);
+        write_u64!(writer, self.modification_time);
         write_u32!(writer, self.track_id);
         write_zeroes!(writer, 4);
-        write_u32!(writer, self.duration);
+        write_u64!(writer, self.duration);
         write_zeroes!(writer, 4 * 2);
         write_i16!(writer, self.layer);
         write_i16!(writer, self.alternate_group);
@@ -1016,10 +1060,10 @@ impl WriteTo for TrackHeaderBox {
 
 #[derive(Debug)]
 pub struct MovieHeaderBox {
-    pub creation_time: u32,
-    pub modification_time: u32,
+    pub creation_time: u64,
+    pub modification_time: u64,
     pub timescale: u32,
-    pub duration: u32,
+    pub duration: u64,
     pub rate: i32,   // fixed point 16.16
     pub volume: i16, // fixed point 8.8
     pub matrix: [i32; 9],
@@ -1044,15 +1088,15 @@ impl WriteBoxTo for MovieHeaderBox {
         BoxType(*b"mvhd")
     }
     fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
+        Some(FullBoxHeader::new(1, 0))
     }
 }
 impl WriteTo for MovieHeaderBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u32!(writer, self.creation_time);
-        write_u32!(writer, self.modification_time);
+        write_u64!(writer, self.creation_time);
+        write_u64!(writer, self.modification_time);
         write_u32!(writer, self.timescale);
-        write_u32!(writer, self.duration);
+        write_u64!(writer, self.duration);
         write_i32!(writer, self.rate);
         write_i16!(writer, self.volume);
         write_zeroes!(writer, 2);
@@ -1068,7 +1112,7 @@ impl WriteTo for MovieHeaderBox {
 
 #[derive(Debug)]
 pub struct MovieExtendsHeaderBox {
-    pub fragment_duration: u32,
+    pub fragment_duration: u64,
 }
 impl MovieExtendsHeaderBox {
     pub fn new() -> Self {
@@ -1082,12 +1126,12 @@ impl WriteBoxTo for MovieExtendsHeaderBox {
         BoxType(*b"mehd")
     }
     fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
+        Some(FullBoxHeader::new(1, 0))
     }
 }
 impl WriteTo for MovieExtendsHeaderBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u32!(writer, self.fragment_duration);
+        write_u64!(writer, self.fragment_duration);
         Ok(())
     }
 }

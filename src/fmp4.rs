@@ -96,31 +96,44 @@ pub trait WriteBoxTo: WriteTo {
 }
 
 #[derive(Debug)]
-pub struct File {
+pub struct InitializationSegment {
     pub ftyp_box: FileTypeBox,
     pub moov_box: MovieBox,
-    pub mdat_boxes: Vec<MediaDataBox>,
-    pub moof_boxes: Vec<MovieFragmentBox>,
-    pub mfra_box: MovieFragmentRandomAccessBox,
 }
-impl File {
-    pub fn new() -> File {
-        File {
+impl InitializationSegment {
+    pub fn new() -> Self {
+        InitializationSegment {
             ftyp_box: FileTypeBox::default(),
             moov_box: MovieBox::new(),
-            mdat_boxes: Vec::new(),
-            moof_boxes: Vec::new(),
-            mfra_box: MovieFragmentRandomAccessBox::new(),
         }
     }
 }
-impl WriteTo for File {
+impl WriteTo for InitializationSegment {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.ftyp_box);
         write_box!(writer, self.moov_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MediaSegment {
+    pub moof_box: MovieFragmentBox,
+    pub mdat_boxes: Vec<MediaDataBox>,
+}
+impl MediaSegment {
+    pub fn new() -> Self {
+        MediaSegment {
+            moof_box: MovieFragmentBox::new(),
+            mdat_boxes: Vec::new(),
+        }
+    }
+}
+impl WriteTo for MediaSegment {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        track_assert!(!self.mdat_boxes.is_empty(), ErrorKind::InvalidInput);
+        write_box!(writer, self.moof_box);
         write_boxes!(writer, &self.mdat_boxes);
-        write_boxes!(writer, &self.moof_boxes);
-        write_box!(writer, self.mfra_box);
         Ok(())
     }
 }
@@ -137,37 +150,6 @@ impl WriteBoxTo for MediaDataBox {
 impl WriteTo for MediaDataBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
         write_all!(writer, &self.data);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct MovieFragmentRandomAccessBox {
-    pub mfro_box: MovieFragmentRandomAccessOffsetBox,
-    // TOOD(?): tfra_boxes
-}
-impl MovieFragmentRandomAccessBox {
-    pub fn new() -> Self {
-        MovieFragmentRandomAccessBox {
-            mfro_box: MovieFragmentRandomAccessOffsetBox::new(),
-        }
-    }
-}
-impl WriteBoxTo for MovieFragmentRandomAccessBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"mfra")
-    }
-    fn box_size(&self) -> u32 {
-        let mut writer = WriteBytesCounter::new();
-        track_try_unwrap!(self.mfro_box.write_box_to(&mut writer));
-        8 + writer.count() as u32
-    }
-}
-impl WriteTo for MovieFragmentRandomAccessBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        let mut mfro_box = self.mfro_box.clone();
-        mfro_box.size = self.box_size();
-        write_box!(writer, mfro_box);
         Ok(())
     }
 }
@@ -206,13 +188,13 @@ impl WriteTo for MovieBox {
 #[derive(Debug)]
 pub struct MovieFragmentBox {
     pub mfhd_box: MovieFragmentHeaderBox,
-    pub traf_box: TrackFragmentBox,
+    pub traf_boxes: Vec<TrackFragmentBox>,
 }
 impl MovieFragmentBox {
-    pub fn new(track_id: u32) -> Self {
+    pub fn new() -> Self {
         MovieFragmentBox {
             mfhd_box: MovieFragmentHeaderBox::new(),
-            traf_box: TrackFragmentBox::new(track_id),
+            traf_boxes: Vec::new(),
         }
     }
 }
@@ -223,8 +205,9 @@ impl WriteBoxTo for MovieFragmentBox {
 }
 impl WriteTo for MovieFragmentBox {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        track_assert!(!self.traf_boxes.is_empty(), ErrorKind::InvalidInput);
         write_box!(writer, self.mfhd_box);
-        write_box!(writer, self.traf_box);
+        write_boxes!(writer, &self.traf_boxes);
         Ok(())
     }
 }
@@ -264,7 +247,7 @@ pub struct MovieFragmentHeaderBox {
 }
 impl MovieFragmentHeaderBox {
     pub fn new() -> Self {
-        MovieFragmentHeaderBox { sequence_number: 0 }
+        MovieFragmentHeaderBox { sequence_number: 1 }
     }
 }
 impl WriteBoxTo for MovieFragmentHeaderBox {
@@ -315,7 +298,7 @@ impl WriteBoxTo for TrackRunBox {
             | (head.sample_size.is_some() as u32 * 0x00_0200)
             | (head.sample_flags.is_some() as u32 * 0x00_0400)
             | (head.sample_composition_time_offset.is_some() as u32 * 0x00_0800);
-        Some(FullBoxHeader::new(0, flags))
+        Some(FullBoxHeader::new(1, flags))
     }
 }
 impl WriteTo for TrackRunBox {
@@ -339,7 +322,7 @@ impl WriteTo for TrackRunBox {
                 write_u32!(writer, x);
             }
             if let Some(x) = e.sample_composition_time_offset {
-                write_u32!(writer, x);
+                write_i32!(writer, x);
             }
         }
         Ok(())
@@ -351,7 +334,7 @@ pub struct TrunEntry {
     pub sample_duration: Option<u32>,
     pub sample_size: Option<u32>,
     pub sample_flags: Option<u32>,
-    pub sample_composition_time_offset: Option<u32>,
+    pub sample_composition_time_offset: Option<i32>,
 }
 
 #[derive(Debug)]
@@ -381,6 +364,28 @@ impl WriteTo for TrackFragmentBaseMediaDecodeTimeBox {
 }
 
 #[derive(Debug)]
+pub struct SampleFlags {
+    // reserved(4)
+    pub is_leading: u8,             // u2
+    pub sample_depends_on: u8,      // u2
+    pub sample_is_depdended_on: u8, // u2
+    pub sample_has_redundancy: u8,  // u2
+    pub sample_padding_value: u8,   // u3
+    pub sample_is_non_sync_sample: bool,
+    pub sample_degradation_priority: u16,
+}
+impl SampleFlags {
+    pub fn to_u32(&self) -> u32 {
+        (u32::from(self.is_leading) << 26) | (u32::from(self.sample_depends_on) << 24)
+            | (u32::from(self.sample_is_depdended_on) << 22)
+            | (u32::from(self.sample_has_redundancy) << 20)
+            | (u32::from(self.sample_padding_value) << 17)
+            | ((self.sample_is_non_sync_sample as u32) << 16)
+            | u32::from(self.sample_degradation_priority)
+    }
+}
+
+#[derive(Debug)]
 pub struct TrackFragmentHeaderBox {
     pub track_id: u32,
     pub duration_is_empty: bool,
@@ -396,7 +401,7 @@ impl TrackFragmentHeaderBox {
         TrackFragmentHeaderBox {
             track_id,
             duration_is_empty: false,
-            default_base_is_moof: false,
+            default_base_is_moof: true,
             base_data_offset: None,
             sample_description_index: None,
             default_sample_duration: None,
@@ -751,32 +756,6 @@ impl WriteTo for SampleEntry {
         write_zeroes!(writer, 6);
         write_u16!(writer, self.data_reference_index);
         write_all!(writer, &self.data);
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MovieFragmentRandomAccessOffsetBox {
-    pub size: u32,
-}
-impl MovieFragmentRandomAccessOffsetBox {
-    pub fn new() -> Self {
-        MovieFragmentRandomAccessOffsetBox{
-            size: 0 // NOTE
-        }
-    }
-}
-impl WriteBoxTo for MovieFragmentRandomAccessOffsetBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"mfro")
-    }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for MovieFragmentRandomAccessOffsetBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u32!(writer, self.size);
         Ok(())
     }
 }

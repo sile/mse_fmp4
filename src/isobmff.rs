@@ -227,7 +227,7 @@ impl File {
             }
             b"mdat" => {
                 let x = track!(MediaDataBox::read_from(reader))?;
-                println!("[mdat] {} bytes", x.data.len());
+                println!("[mdat] {} bytes: {:?}", x.data.len(), &x.data[0..16]);
                 mdat_boxes.push(x);
                 Ok(())
             }

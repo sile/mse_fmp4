@@ -1,3 +1,4 @@
+extern crate byteorder;
 extern crate clap;
 extern crate mpeg2ts;
 extern crate mse_fmp4;
@@ -7,9 +8,10 @@ extern crate trackable;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
+use byteorder::{BigEndian, WriteBytesExt};
 use clap::{App, Arg};
 use mpeg2ts::time::Timestamp;
-use mse_fmp4::fmp4::{self, WriteTo};
+use mse_fmp4::fmp4::{self, WriteBoxTo, WriteTo};
 use mse_fmp4::avc;
 use mse_fmp4::ErrorKind;
 use mpeg2ts::pes::{PesPacket, PesPacketReader, ReadPesPacket};
@@ -77,10 +79,10 @@ fn read_avc_stream() -> mse_fmp4::Result<AvcStream> {
                         sps_info = Some(track!(avc::SequenceParameterSet::read_from(
                             &nal_unit[1..]
                         ))?);
-                        sps = Some((&nal_unit[1..]).to_owned());
+                        sps = Some(nal_unit.to_owned());
                     }
                     avc::NalUnitType::PictureParameterSet => {
-                        pps = Some((&nal_unit[1..]).to_owned());
+                        pps = Some(nal_unit.to_owned());
                     }
                     _ => {}
                 }
@@ -117,10 +119,14 @@ fn main() {
     let output_file_prefix = matches.value_of("OUTPUT_FILE_PREFIX").unwrap();
 
     let avc_stream = track_try_unwrap!(read_avc_stream());
+    let rec = avc_stream.decoder_configuration_record.clone().unwrap();
     writeln!(
         std::io::stderr(),
-        "# {:?}",
-        avc_stream.decoder_configuration_record
+        "# {:?}: {:02x}{:02x}{:02x}",
+        rec,
+        rec.profile_idc,
+        rec.constraint_set_flag,
+        rec.level_idc
     ).unwrap();
     writeln!(
         std::io::stderr(),
@@ -129,22 +135,22 @@ fn main() {
         avc_stream.height
     ).unwrap();
 
-    let mut f = fmp4::File::new();
+    let mut init_seg = fmp4::InitializationSegment::new();
     let video_duration = avc_stream.duration();
     writeln!(
         std::io::stderr(),
         "# DURATION: {}",
         video_duration as f64 / Timestamp::RESOLUTION as f64,
     ).unwrap();
-    f.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
-    f.moov_box.mvhd_box.duration = video_duration * Timestamp::RESOLUTION;
+    init_seg.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
+    init_seg.moov_box.mvhd_box.duration = video_duration;
 
     let mut t = fmp4::TrackBox::new(true);
     t.tkhd_box.width = (avc_stream.width.unwrap() as u32) << 16;
     t.tkhd_box.height = (avc_stream.height.unwrap() as u32) << 16;
-    t.tkhd_box.duration = video_duration * Timestamp::RESOLUTION;
+    t.tkhd_box.duration = video_duration;
     t.mdia_box.mdhd_box.timescale = Timestamp::RESOLUTION as u32;
-    t.mdia_box.mdhd_box.duration = video_duration * Timestamp::RESOLUTION;
+    t.mdia_box.mdhd_box.duration = video_duration;
 
     let avc_sample_entry = fmp4::AvcSampleEntry {
         width: avc_stream.width.unwrap() as u16,
@@ -160,10 +166,11 @@ fn main() {
         .sample_entries
         .push(track_try_unwrap!(avc_sample_entry.to_sample_entry()));
 
-    f.moov_box.trak_boxes.push(t);
+    init_seg.moov_box.trak_boxes.push(t);
 
-    f.moov_box.mvex_box.mehd_box.fragment_duration = video_duration * Timestamp::RESOLUTION;
-    f.moov_box
+    init_seg.moov_box.mvex_box.mehd_box.fragment_duration = video_duration;
+    init_seg
+        .moov_box
         .mvex_box
         .trex_boxes
         .push(fmp4::TrackExtendsBox::new(1));
@@ -172,7 +179,94 @@ fn main() {
             File::create(format!("{}-init.mp4", output_file_prefix))
                 .map_err(|e| ErrorKind::Other.cause(e))
         );
-        track_try_unwrap!(f.write_to(out))
+        track_try_unwrap!(init_seg.write_to(out))
+    }
+
+    let mut media_seg = fmp4::MediaSegment::new();
+    let mut mdat = fmp4::MediaDataBox { data: Vec::new() };
+    let mut traf = fmp4::TrackFragmentBox::new(1);
+    // traf.tfhd_box.default_sample_duration =
+    //     Some(video_duration as u32 / avc_stream.packets.len() as u32); // TODO
+    traf.tfhd_box.default_sample_flags = Some(
+        fmp4::SampleFlags {
+            // TODO:
+            is_leading: 0,
+            sample_depends_on: 1,
+            sample_is_depdended_on: 0,
+            sample_has_redundancy: 0,
+            sample_padding_value: 0,
+            sample_is_non_sync_sample: true,
+            sample_degradation_priority: 0,
+        }.to_u32(),
+    );
+    traf.trun_box.data_offset = Some(0); // dummy
+    traf.trun_box.first_sample_flags = Some(
+        fmp4::SampleFlags {
+            // TODO:
+            is_leading: 0,
+            sample_depends_on: 2,
+            sample_is_depdended_on: 0,
+            sample_has_redundancy: 0,
+            sample_padding_value: 0,
+            sample_is_non_sync_sample: false,
+            sample_degradation_priority: 0,
+        }.to_u32(),
+    );
+    let mut prev_pts: Option<Timestamp> = None;
+    for pes in &avc_stream.packets {
+        let nal_units = track_try_unwrap!(avc::ByteStreamFormatNalUnits::new(&pes.data));
+        let mdat_start = mdat.data.len();
+        for nal_unit in nal_units {
+            // let nal = track_try_unwrap!(avc::NalUnit::read_from(nal_unit));
+            // match nal.nal_unit_type {
+            //     avc::NalUnitType::AccessUnitDelimiter
+            //     | avc::NalUnitType::SequenceParameterSet
+            //     | avc::NalUnitType::PictureParameterSet
+            //     | avc::NalUnitType::SupplementalEnhancementInformation => {
+            //         // TODO: remove(?)
+            //         continue;
+            //     }
+            //     _ => {}
+            // }
+            mdat.data
+                .write_u32::<BigEndian>(nal_unit.len() as u32)
+                .unwrap();
+            mdat.data.write_all(nal_unit).unwrap();
+        }
+        let sample_size = (mdat.data.len() - mdat_start) as u32;
+
+        let pts = pes.header.pts.unwrap();
+        let dts = pes.header.dts.unwrap();
+        let sample_composition_time_offset = (pts.as_u64() as i64 - dts.as_u64() as i64) as i32;
+        let duration = // TODO
+                if let Some(prev) = prev_pts {
+                    // TODO: edts
+                    // TODO: handle reorder
+                     (pts.as_u64() - prev.as_u64()) as u32
+                } else {
+                    sample_composition_time_offset as u32
+                };
+        let entry = fmp4::TrunEntry {
+            sample_duration: Some(duration),
+            sample_size: Some(sample_size),
+            sample_flags: None,
+            sample_composition_time_offset: Some(sample_composition_time_offset),
+        };
+        traf.trun_box.entries.push(entry);
+        prev_pts = Some(pts);
+    }
+    media_seg.moof_box.traf_boxes.push(traf);
+    let mut counter = fmp4::WriteBytesCounter::new();
+    media_seg.moof_box.write_box_to(&mut counter).unwrap();
+    media_seg.moof_box.traf_boxes[0].trun_box.data_offset = Some(counter.count() as i32 + 8);
+
+    media_seg.mdat_boxes.push(mdat);
+    {
+        let out = track_try_unwrap!(
+            File::create(format!("{}.m4s", output_file_prefix))
+                .map_err(|e| ErrorKind::Other.cause(e))
+        );
+        track_try_unwrap!(media_seg.write_to(out))
     }
 }
 

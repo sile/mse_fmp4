@@ -7,9 +7,92 @@ use std::collections::HashMap;
 use std::io::Read;
 // use mpeg2ts::time::Timestamp;
 // use mse_fmp4::fmp4::{self, WriteTo};
-use mpeg2ts::pes::{PesPacketReader, ReadPesPacket};
+use mse_fmp4::avc;
+use mse_fmp4::ErrorKind;
+use mpeg2ts::pes::{PesPacket, PesPacketReader, ReadPesPacket};
 use mpeg2ts::es::{StreamId, StreamType};
 use mpeg2ts::ts::{Pid, ReadTsPacket, TsPacket, TsPacketReader, TsPayload};
+use trackable::error::ErrorKindExt;
+
+struct AvcStream {
+    decoder_configuration_record: Option<avc::AvcDecoderConfigurationRecord>,
+    width: Option<usize>,
+    height: Option<usize>,
+    packets: Vec<PesPacket<Vec<u8>>>,
+}
+
+fn read_avc_stream() -> mse_fmp4::Result<AvcStream> {
+    let mut stream = AvcStream {
+        decoder_configuration_record: None,
+        height: None,
+        width: None,
+        packets: Vec::new(),
+    };
+
+    let mut is_first_video = true;
+    let reader = MyTsPacketReader {
+        inner: TsPacketReader::new(std::io::stdin()),
+        pid_to_stream_type: HashMap::new(),
+        stream_id_to_pid: HashMap::new(),
+    };
+    let mut reader = PesPacketReader::new(reader);
+    while let Some(pes) = track!(
+        reader
+            .read_pes_packet()
+            .map_err(|e| ErrorKind::Other.takes_over(e))
+    )? {
+        if !pes.header.stream_id.is_video() {
+            continue;
+        }
+
+        if is_first_video {
+            is_first_video = false;
+            let stream_type = track_assert_some!(
+                reader
+                    .ts_packet_reader()
+                    .get_stream_type(pes.header.stream_id),
+                ErrorKind::InvalidInput
+            );
+            track_assert_eq!(stream_type, StreamType::H264, ErrorKind::Unsupported);
+
+            let mut sps = None;
+            let mut pps = None;
+            let mut sps_info = None;
+            let nal_units = track!(avc::ByteStreamFormatNalUnits::new(&pes.data))?;
+            for nal_unit in nal_units {
+                let nal = track!(avc::NalUnit::read_from(nal_unit))?;
+                match nal.nal_unit_type {
+                    avc::NalUnitType::SequenceParameterSet => {
+                        sps_info = Some(track!(avc::SequenceParameterSet::read_from(
+                            &nal_unit[1..]
+                        ))?);
+                        sps = Some((&nal_unit[1..]).to_owned());
+                    }
+                    avc::NalUnitType::PictureParameterSet => {
+                        pps = Some((&nal_unit[1..]).to_owned());
+                    }
+                    _ => {}
+                }
+            }
+
+            let sps_info = track_assert_some!(sps_info, ErrorKind::InvalidInput);
+            let sps = track_assert_some!(sps, ErrorKind::InvalidInput);
+            let pps = track_assert_some!(pps, ErrorKind::InvalidInput);
+            stream.decoder_configuration_record = Some(avc::AvcDecoderConfigurationRecord {
+                profile_idc: sps_info.profile_idc,
+                constraint_set_flag: sps_info.constraint_set_flag,
+                level_idc: sps_info.level_idc,
+                sequence_parameter_set: sps,
+                picture_parameter_set: pps,
+            });
+            stream.width = Some(sps_info.width());
+            stream.height = Some(sps_info.height());
+        }
+        stream.packets.push(pes);
+    }
+
+    Ok(stream)
+}
 
 fn main() {
     // let mut f = fmp4::File::new();
@@ -31,30 +114,9 @@ fn main() {
     //     .push(fmp4::TrackExtendsBox::new(1));
     // track_try_unwrap!(f.write_to(std::io::stdout()));
 
-    let mut is_first_video = true;
-    let reader = MyTsPacketReader {
-        inner: TsPacketReader::new(std::io::stdin()),
-        pid_to_stream_type: HashMap::new(),
-        stream_id_to_pid: HashMap::new(),
-    };
-    let mut reader = PesPacketReader::new(reader);
-    while let Some(pes) = track_try_unwrap!(reader.read_pes_packet()) {
-        println!("{:?} {} bytes", pes.header, pes.data.len());
-        if !pes.header.stream_id.is_video() {
-            // TODO:
-            continue;
-        }
-
-        if pes.header.stream_id.is_video() && is_first_video {
-            is_first_video = false;
-            let stream_type = reader
-                .ts_packet_reader()
-                .get_stream_type(pes.header.stream_id)
-                .unwrap();
-            assert_eq!(stream_type, StreamType::H264);
-            println!("# {:?}", &pes.data[0..32]);
-        }
-    }
+    let avc_stream = track_try_unwrap!(read_avc_stream());
+    println!("# {:?}", avc_stream.decoder_configuration_record);
+    println!("# {:?}, {:?}", avc_stream.width, avc_stream.height);
 }
 
 struct MyTsPacketReader<R> {

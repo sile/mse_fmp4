@@ -13,6 +13,7 @@ macro_rules! track_io {
 
 pub use error::{Error, ErrorKind};
 
+pub mod avc;
 pub mod fmp4;
 pub mod isobmff;
 

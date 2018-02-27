@@ -13,14 +13,46 @@ pub struct AdtsHeader {
     pub sampling_frequency: SamplingFrequency,
     pub private: bool,
     pub channel_configuration: ChannelConfiguration,
-    pub frame_len: u16,                // u13
-    pub buffer_fullness: u16,          // u11
-    pub num_of_aac_frames_minus_1: u8, // u2
+    pub frame_len: u16,       // u13
+    pub buffer_fullness: u16, // u11
+    pub rdbs_minus_1: u8,     // u2
 }
 impl AdtsHeader {
     pub fn frame_len_exclude_header(&self) -> u16 {
         self.frame_len - if self.crc_protection_absent { 7 } else { 9 }
     }
+    pub fn duration(&self) -> u32 {
+        1024 * u32::from(self.rdbs_minus_1 + 1)
+    }
+    pub fn timescale(&self) -> u32 {
+        match self.sampling_frequency {
+            SamplingFrequency::Hz96000 => 96_000,
+            SamplingFrequency::Hz88200 => 88_200,
+            SamplingFrequency::Hz64000 => 64_000,
+            SamplingFrequency::Hz48000 => 48_000,
+            SamplingFrequency::Hz44100 => 44_100,
+            SamplingFrequency::Hz32000 => 32_000,
+            SamplingFrequency::Hz24000 => 24_000,
+            SamplingFrequency::Hz22050 => 22_050,
+            SamplingFrequency::Hz16000 => 16_000,
+            SamplingFrequency::Hz12000 => 12_000,
+            SamplingFrequency::Hz11025 => 11_025,
+            SamplingFrequency::Hz8000 => 8_000,
+            SamplingFrequency::Hz7350 => 7_350,
+        }
+    }
+
+    pub fn to_audio_specific_config_u16(&self) -> u16 {
+        let object_type = (self.profile as u16) + 1;
+        let frequency_index = self.sampling_frequency as u16;
+        let channel_configuration = self.channel_configuration as u16;
+        let frame_len_flag = 0;
+        let depends_on_core_coder = 0;
+        let extension_flag = 0;
+        (object_type << 11) | (frequency_index << 7) | (channel_configuration << 3)
+            | (frame_len_flag << 2) | (depends_on_core_coder << 1) | extension_flag
+    }
+
     pub fn read_from<R: Read>(mut reader: R) -> Result<Self> {
         let n = track_io!(reader.read_u16::<BigEndian>())?;
         track_assert_eq!(n >> 4, SYNC_WORD, ErrorKind::InvalidInput);
@@ -32,6 +64,7 @@ impl AdtsHeader {
         };
         let layer = (n >> 1) & 0b11;
         let crc_protection_absent = (n & 0b1) != 0;
+        track_assert_eq!(mpeg_version_id, MpegVersion::Mpeg4, ErrorKind::Unsupported);
         track_assert_eq!(layer, 0, ErrorKind::InvalidInput);
 
         let n = track_io!(reader.read_u8())?;
@@ -65,7 +98,7 @@ impl AdtsHeader {
 
         let n = track_io!(reader.read_u8())?;
         let buffer_fullness = (buffer_fullness_msb_5bits << 5) | u16::from(n >> 2);
-        let num_of_aac_frames_minus_1 = n & 0b11;
+        let rdbs_minus_1 = n & 0b11;
         if !crc_protection_absent {
             // 16bits
             track_panic!(ErrorKind::Unsupported);
@@ -80,7 +113,7 @@ impl AdtsHeader {
             channel_configuration,
             frame_len,
             buffer_fullness,
-            num_of_aac_frames_minus_1,
+            rdbs_minus_1,
         })
     }
 }

@@ -12,7 +12,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use clap::{App, Arg};
 use mpeg2ts::time::Timestamp;
 use mse_fmp4::fmp4::{self, WriteBoxTo, WriteTo};
-use mse_fmp4::avc;
+use mse_fmp4::{aac, avc};
 use mse_fmp4::ErrorKind;
 use mpeg2ts::pes::{PesPacket, PesPacketReader, ReadPesPacket};
 use mpeg2ts::es::{StreamId, StreamType};
@@ -34,11 +34,19 @@ impl AvcStream {
     }
 }
 
-fn read_avc_stream() -> mse_fmp4::Result<AvcStream> {
-    let mut stream = AvcStream {
+struct AacStream {
+    packets: Vec<PesPacket<Vec<u8>>>,
+}
+
+fn read_avc_aac_stream() -> mse_fmp4::Result<(AvcStream, AacStream)> {
+    let mut avc_stream = AvcStream {
         decoder_configuration_record: None,
         height: None,
         width: None,
+        packets: Vec::new(),
+    };
+
+    let mut aac_stream = AacStream {
         packets: Vec::new(),
     };
 
@@ -54,18 +62,29 @@ fn read_avc_stream() -> mse_fmp4::Result<AvcStream> {
             .read_pes_packet()
             .map_err(|e| ErrorKind::Other.takes_over(e))
     )? {
+        let stream_type = track_assert_some!(
+            reader
+                .ts_packet_reader()
+                .get_stream_type(pes.header.stream_id),
+            ErrorKind::InvalidInput
+        );
         if !pes.header.stream_id.is_video() {
+            track_assert!(pes.header.stream_id.is_audio(), ErrorKind::InvalidInput);
+            track_assert_eq!(stream_type, StreamType::AdtsAac, ErrorKind::Unsupported);
+            {
+                let mut reader = &pes.data[..];
+                while !reader.is_empty() {
+                    let header = track!(aac::AdtsHeader::read_from(&mut reader))?;
+                    println!("@ {:?}", header);
+                    reader = &reader[header.frame_len_exclude_header() as usize..];
+                }
+            }
+            aac_stream.packets.push(pes);
             continue;
         }
 
         if is_first_video {
             is_first_video = false;
-            let stream_type = track_assert_some!(
-                reader
-                    .ts_packet_reader()
-                    .get_stream_type(pes.header.stream_id),
-                ErrorKind::InvalidInput
-            );
             track_assert_eq!(stream_type, StreamType::H264, ErrorKind::Unsupported);
 
             let mut sps = None;
@@ -91,20 +110,20 @@ fn read_avc_stream() -> mse_fmp4::Result<AvcStream> {
             let sps_info = track_assert_some!(sps_info, ErrorKind::InvalidInput);
             let sps = track_assert_some!(sps, ErrorKind::InvalidInput);
             let pps = track_assert_some!(pps, ErrorKind::InvalidInput);
-            stream.decoder_configuration_record = Some(avc::AvcDecoderConfigurationRecord {
+            avc_stream.decoder_configuration_record = Some(avc::AvcDecoderConfigurationRecord {
                 profile_idc: sps_info.profile_idc,
                 constraint_set_flag: sps_info.constraint_set_flag,
                 level_idc: sps_info.level_idc,
                 sequence_parameter_set: sps,
                 picture_parameter_set: pps,
             });
-            stream.width = Some(sps_info.width());
-            stream.height = Some(sps_info.height());
+            avc_stream.width = Some(sps_info.width());
+            avc_stream.height = Some(sps_info.height());
         }
-        stream.packets.push(pes);
+        avc_stream.packets.push(pes);
     }
 
-    Ok(stream)
+    Ok((avc_stream, aac_stream))
 }
 
 fn main() {
@@ -118,7 +137,7 @@ fn main() {
         .get_matches();
     let output_file_prefix = matches.value_of("OUTPUT_FILE_PREFIX").unwrap();
 
-    let avc_stream = track_try_unwrap!(read_avc_stream());
+    let (avc_stream, aac_stream) = track_try_unwrap!(read_avc_aac_stream());
     let rec = avc_stream.decoder_configuration_record.clone().unwrap();
     writeln!(
         std::io::stderr(),
@@ -217,17 +236,6 @@ fn main() {
         let nal_units = track_try_unwrap!(avc::ByteStreamFormatNalUnits::new(&pes.data));
         let mdat_start = mdat.data.len();
         for nal_unit in nal_units {
-            // let nal = track_try_unwrap!(avc::NalUnit::read_from(nal_unit));
-            // match nal.nal_unit_type {
-            //     avc::NalUnitType::AccessUnitDelimiter
-            //     | avc::NalUnitType::SequenceParameterSet
-            //     | avc::NalUnitType::PictureParameterSet
-            //     | avc::NalUnitType::SupplementalEnhancementInformation => {
-            //         // TODO: remove(?)
-            //         continue;
-            //     }
-            //     _ => {}
-            // }
             mdat.data
                 .write_u32::<BigEndian>(nal_unit.len() as u32)
                 .unwrap();

@@ -2,6 +2,15 @@
 name = "mse_fmp4"
 version = "0.1.0"
 authors = ["Takeru Ohta <phjgt308@gmail.com>"]
+description = "A library for generating fragmented MP4 that playable via Media Source Extensions"
+homepage = "https://github.com/sile/mse_fmp4"
+repository = "https://github.com/sile/mse_fmp4"
+readme = "README.md"
+license = "MIT"
+
+[badges]
+travis-ci = {repository = "sile/mse_fmp4"}
+codecov = {repository = "sile/mse_fmp4"}
 
 [dependencies]
 byteorder = "1"

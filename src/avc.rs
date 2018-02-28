@@ -32,7 +32,7 @@ impl AvcDecoderConfigurationRecord {
         write_u16!(writer, self.sequence_parameter_set.len() as u16);
         write_all!(writer, &self.sequence_parameter_set);
 
-        write_u8!(writer, 0b0000_0000 | 0b0000_0001); // reserved and num_of_picture_parameter_set_ext
+        write_u8!(writer, 0b0000_0001); // num_of_picture_parameter_set_ext
         write_u16!(writer, self.picture_parameter_set.len() as u16);
         write_all!(writer, &self.picture_parameter_set);
         Ok(())
@@ -89,11 +89,11 @@ impl SpsSummary {
             }
             1 => {
                 let _delta_pic_order_always_zero_flag = track!(reader.read_bit())?;
-                let _offset_for_non_ref_pic = track!(reader.read_ue())?; // TODO: se
-                let _ffset_for_top_to_bottom_field = track!(reader.read_ue())?; // TODO: se
+                let _offset_for_non_ref_pic = track!(reader.read_ue())?;
+                let _ffset_for_top_to_bottom_field = track!(reader.read_ue())?;
                 let num_ref_frames_in_pic_order_cnt_cycle = track!(reader.read_ue())?;
                 for _ in 0..num_ref_frames_in_pic_order_cnt_cycle {
-                    let _offset_for_ref_frame = track!(reader.read_ue())?; // TODO: se
+                    let _offset_for_ref_frame = track!(reader.read_ue())?;
                 }
             }
             _ => track_panic!(ErrorKind::InvalidInput),
@@ -108,16 +108,21 @@ impl SpsSummary {
         }
         let _direct_8x8_inference_flag = track!(reader.read_bit())?;
         let frame_cropping_flag = track!(reader.read_bit())?;
-        let mut frame_crop_left_offset = 0;
-        let mut frame_crop_right_offset = 0;
-        let mut frame_crop_top_offset = 0;
-        let mut frame_crop_bottom_offset = 0;
-        if frame_cropping_flag == 1 {
-            frame_crop_left_offset = track!(reader.read_ue())?;
-            frame_crop_right_offset = track!(reader.read_ue())?;
-            frame_crop_top_offset = track!(reader.read_ue())?;
-            frame_crop_bottom_offset = track!(reader.read_ue())?;
-        }
+        let (
+            frame_crop_left_offset,
+            frame_crop_right_offset,
+            frame_crop_top_offset,
+            frame_crop_bottom_offset,
+        ) = if frame_cropping_flag == 1 {
+            (
+                track!(reader.read_ue())?,
+                track!(reader.read_ue())?,
+                track!(reader.read_ue())?,
+                track!(reader.read_ue())?,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
 
         Ok(SpsSummary {
             profile_idc,
@@ -219,20 +224,20 @@ impl<'a> Iterator for ByteStreamFormatNalUnits<'a> {
         if self.bytes.is_empty() {
             None
         } else {
-            let mut end = self.bytes.len();
+            let mut nal_unit_end = self.bytes.len();
             let mut next_start = self.bytes.len();
             for i in 0..self.bytes.len() {
                 if (&self.bytes[i..]).starts_with(&[0, 0, 0, 1][..]) {
-                    end = i;
+                    nal_unit_end = i;
                     next_start = i + 4;
                     break;
                 } else if (&self.bytes[i..]).starts_with(&[0, 0, 1][..]) {
-                    end = i;
+                    nal_unit_end = i;
                     next_start = i + 3;
                     break;
                 }
             }
-            let nal_unit = &self.bytes[..end];
+            let nal_unit = &self.bytes[..nal_unit_end];
             self.bytes = &self.bytes[next_start..];
             Some(nal_unit)
         }

@@ -135,15 +135,14 @@ impl Mp4Box for TrackFragmentHeaderBox {
     const BOX_TYPE: [u8; 4] = *b"tfhd";
 
     fn box_flags(&self) -> Option<u32> {
-        Some(
-            (self.base_data_offset.is_some() as u32 * 0x00_0001)
-                | (self.sample_description_index.is_some() as u32 * 0x00_0002)
-                | (self.default_sample_duration.is_some() as u32 * 0x00_0008)
-                | (self.default_sample_size.is_some() as u32 * 0x00_0010)
-                | (self.default_sample_flags.is_some() as u32 * 0x00_0020)
-                | (self.duration_is_empty as u32 * 0x01_0000)
-                | (self.default_base_is_moof as u32 * 0x02_0000),
-        )
+        let flags = self.base_data_offset.is_some() as u32
+            | (self.sample_description_index.is_some() as u32 * 0x00_0002)
+            | (self.default_sample_duration.is_some() as u32 * 0x00_0008)
+            | (self.default_sample_size.is_some() as u32 * 0x00_0010)
+            | (self.default_sample_flags.is_some() as u32 * 0x00_0020)
+            | (self.duration_is_empty as u32 * 0x01_0000)
+            | (self.default_base_is_moof as u32 * 0x02_0000);
+        Some(flags)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, self.track_id);
@@ -200,7 +199,7 @@ impl Mp4Box for TrackRunBox {
             .first()
             .cloned()
             .unwrap_or_else(Sample::default);
-        let flags = (self.data_offset.is_some() as u32 * 0x00_0001)
+        let flags = self.data_offset.is_some() as u32
             | (self.first_sample_flags.is_some() as u32 * 0x00_0004)
             | sample.to_box_flags();
         Some(flags)

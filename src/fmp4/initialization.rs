@@ -82,11 +82,11 @@ impl Mp4Box for MovieHeaderBox {
         write_u32!(writer, 0); // modification_time
         write_u32!(writer, self.timescale);
         write_u32!(writer, self.duration);
-        write_i32!(writer, 65536); // rate
+        write_i32!(writer, 0x1_0000); // rate
         write_i16!(writer, 256); // volume
         write_zeroes!(writer, 2);
         write_zeroes!(writer, 4 * 2);
-        for &x in &[65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824] {
+        for &x in &[0x1_0000, 0, 0, 0, 0x1_0000, 0, 0, 0, 0x4000_0000] {
             write_i32!(writer, x); // matrix
         }
         write_zeroes!(writer, 4 * 6);
@@ -169,7 +169,7 @@ impl Mp4Box for TrackHeaderBox {
         write_i16!(writer, 0); // alternate_group
         write_i16!(writer, self.volume);
         write_zeroes!(writer, 2);
-        for &x in &[65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824] {
+        for &x in &[0x1_0000, 0, 0, 0, 0x1_0000, 0, 0, 0, 0x4000_0000] {
             write_i32!(writer, x); // matrix
         }
         write_u32!(writer, self.width);
@@ -232,7 +232,7 @@ impl Mp4Box for MediaHeaderBox {
         write_u32!(writer, 0); // modification_time
         write_u32!(writer, self.timescale);
         write_u32!(writer, self.duration);
-        write_u16!(writer, 21956); // language
+        write_u16!(writer, 0x55c4); // language
         write_zeroes!(writer, 2);
         Ok(())
     }

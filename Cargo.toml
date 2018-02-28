@@ -5,8 +5,8 @@ authors = ["Takeru Ohta <phjgt308@gmail.com>"]
 
 [dependencies]
 byteorder = "1"
+mpeg2ts= "0.1"
 trackable = "0.2"
 
 [dev-dependencies]
 clap = "2"
-mpeg2ts= "0.1"

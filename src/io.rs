@@ -1,14 +1,17 @@
+//! I/O related constituent elements.
 use std::io::{sink, Read, Result as IoResult, Sink, Write};
 use byteorder::ReadBytesExt;
 
 use Result;
 
+/// A trait for objects which can be written to byte-oriented sinks.
 pub trait WriteTo {
+    /// Writes this object to the given byte-oriented sink.
     fn write_to<W: Write>(&self, writer: W) -> Result<()>;
 }
 
 #[derive(Debug)]
-pub struct ByteCounter<T> {
+pub(crate) struct ByteCounter<T> {
     inner: T,
     count: u64,
 }
@@ -16,9 +19,7 @@ impl<T> ByteCounter<T> {
     pub fn new(inner: T) -> Self {
         ByteCounter { inner, count: 0 }
     }
-    pub fn into_inner(self) -> T {
-        self.inner
-    }
+
     pub fn count(&self) -> u64 {
         self.count
     }
@@ -34,6 +35,7 @@ impl<T: Write> Write for ByteCounter<T> {
         self.count += size as u64;
         Ok(size)
     }
+
     fn flush(&mut self) -> IoResult<()> {
         self.inner.flush()
     }

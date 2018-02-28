@@ -1,3 +1,4 @@
+//! MPEG-2 TS related constituent elements.
 use std::collections::HashMap;
 use std::io::Write;
 use byteorder::{BigEndian, WriteBytesExt};
@@ -16,6 +17,7 @@ use fmp4::{AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSe
            SampleFlags, TrackBox, TrackFragmentBox};
 use io::ByteCounter;
 
+/// Reads TS packets from `reader`, and converts them into fragmented MP4 segments.
 pub fn to_fmp4<R: ReadTsPacket>(reader: R) -> Result<(InitializationSegment, MediaSegment)> {
     let (avc_stream, aac_stream) = track!(read_avc_aac_stream(reader))?;
 

@@ -1,19 +1,138 @@
-use std::cmp;
 use std::collections::HashMap;
+use std::io::Write;
+use byteorder::{BigEndian, WriteBytesExt};
 use mpeg2ts;
 use mpeg2ts::es::{StreamId, StreamType};
-use mpeg2ts::pes::{PesPacket, PesPacketReader, ReadPesPacket};
+use mpeg2ts::pes::{PesPacketReader, ReadPesPacket};
 use mpeg2ts::time::Timestamp;
 use mpeg2ts::ts::{Pid, ReadTsPacket, TsPacket, TsPayload};
 
 use {Error, ErrorKind, Result};
+use aac::AdtsHeader;
 use avc::{AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalUnitType,
           SequenceParameterSet};
-use fmp4::{InitializationSegment, MediaSegment};
+use fmp4::{AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSegment,
+           MediaDataBox, MediaSegment, Mp4Box, Mpeg4EsDescriptorBox, Sample, SampleEntry,
+           SampleFlags, TrackBox, TrackFragmentBox};
+use io::ByteCounter;
 
 pub fn to_fmp4<R: ReadTsPacket>(reader: R) -> Result<(InitializationSegment, MediaSegment)> {
     let (avc_stream, aac_stream) = track!(read_avc_aac_stream(reader))?;
-    panic!()
+
+    let initialization_segment = make_initialization_segment(&avc_stream, &aac_stream);
+    let media_segment = track!(make_media_segment(avc_stream, aac_stream))?;
+    Ok((initialization_segment, media_segment))
+}
+
+fn make_initialization_segment(
+    avc_stream: &AvcStream,
+    aac_stream: &AacStream,
+) -> InitializationSegment {
+    let mut segment = InitializationSegment::new();
+    segment.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
+    segment.moov_box.mvhd_box.duration = avc_stream.duration();
+
+    // video track
+    let mut track = TrackBox::new(true);
+    track.tkhd_box.width = (avc_stream.width as u32) << 16;
+    track.tkhd_box.height = (avc_stream.height as u32) << 16;
+    track.tkhd_box.duration = avc_stream.duration();
+    track.mdia_box.mdhd_box.timescale = Timestamp::RESOLUTION as u32;
+    track.mdia_box.mdhd_box.duration = track.tkhd_box.duration;
+
+    let avc_sample_entry = AvcSampleEntry {
+        width: avc_stream.width as u16,
+        height: avc_stream.height as u16,
+        avcc_box: AvcConfigurationBox {
+            configuration: avc_stream.configuration.clone(),
+        },
+    };
+    track
+        .mdia_box
+        .minf_box
+        .stbl_box
+        .stsd_box
+        .sample_entries
+        .push(SampleEntry::Avc(avc_sample_entry));
+    segment.moov_box.trak_boxes.push(track);
+
+    // audio track
+    let mut track = TrackBox::new(false);
+    track.tkhd_box.duration = u64::from(aac_stream.duration());
+    track.mdia_box.mdhd_box.timescale = aac_stream.adts_header.timescale();
+    track.mdia_box.mdhd_box.duration = track.tkhd_box.duration;
+
+    let aac_sample_entry = AacSampleEntry {
+        channels: aac_stream.adts_header.channel_configuration as u16,
+        sample_rate: aac_stream.adts_header.timescale() as u16,
+        esds_box: Mpeg4EsDescriptorBox {
+            profile: aac_stream.adts_header.profile,
+            frequency: aac_stream.adts_header.sampling_frequency,
+            channel_configuration: aac_stream.adts_header.channel_configuration,
+        },
+    };
+    track
+        .mdia_box
+        .minf_box
+        .stbl_box
+        .stsd_box
+        .sample_entries
+        .push(SampleEntry::Aac(aac_sample_entry));
+    segment.moov_box.trak_boxes.push(track);
+
+    segment
+}
+
+fn make_media_segment(avc_stream: AvcStream, aac_stream: AacStream) -> Result<MediaSegment> {
+    let mut segment = MediaSegment::new();
+
+    // video traf
+    let mut traf = TrackFragmentBox::new(true);
+    traf.tfhd_box.default_sample_flags = Some(SampleFlags {
+        is_leading: 0,
+        sample_depends_on: 1,
+        sample_is_depdended_on: 0,
+        sample_has_redundancy: 0,
+        sample_padding_value: 0,
+        sample_is_non_sync_sample: true,
+        sample_degradation_priority: 0,
+    });
+    traf.trun_box.data_offset = Some(0); // dummy
+    traf.trun_box.first_sample_flags = Some(SampleFlags {
+        is_leading: 0,
+        sample_depends_on: 2,
+        sample_is_depdended_on: 0,
+        sample_has_redundancy: 0,
+        sample_padding_value: 0,
+        sample_is_non_sync_sample: false,
+        sample_degradation_priority: 0,
+    });
+    traf.trun_box.samples = avc_stream.samples;
+    segment.moof_box.traf_boxes.push(traf);
+
+    // audio traf
+    let mut traf = TrackFragmentBox::new(false);
+    traf.tfhd_box.default_sample_duration = Some(1024);
+    traf.trun_box.data_offset = Some(0); // dummy
+    traf.trun_box.samples = aac_stream.samples;
+    segment.moof_box.traf_boxes.push(traf);
+
+    // mdat and offsets adjustment
+    let mut counter = ByteCounter::with_sink();
+    track!(segment.moof_box.write_box(&mut counter))?;
+    segment.moof_box.traf_boxes[0].trun_box.data_offset = Some(counter.count() as i32 + 8);
+
+    segment.mdat_boxes.push(MediaDataBox {
+        data: avc_stream.data,
+    });
+    track!(segment.mdat_boxes[0].write_box(&mut counter))?;
+
+    segment.moof_box.traf_boxes[1].trun_box.data_offset = Some(counter.count() as i32 + 8);
+    segment.mdat_boxes.push(MediaDataBox {
+        data: aac_stream.data,
+    });
+
+    Ok(segment)
 }
 
 #[derive(Debug)]
@@ -21,50 +140,35 @@ struct AvcStream {
     configuration: AvcDecoderConfigurationRecord,
     width: usize,
     height: usize,
-    min_pts: Timestamp,
-    max_pts: Timestamp,
-    packets: Vec<PesPacket<Vec<u8>>>,
+    samples: Vec<Sample>,
+    data: Vec<u8>,
 }
 impl AvcStream {
     fn duration(&self) -> u64 {
-        // TODO: handle wrap around
-        self.max_pts.as_u64() - self.min_pts.as_u64()
+        self.samples
+            .iter()
+            .map(|s| s.duration.expect("Never fails") as u64)
+            .sum()
     }
 }
 
 #[derive(Debug)]
 struct AacStream {
-    packets: Vec<PesPacket<Vec<u8>>>,
+    adts_header: AdtsHeader,
+    samples: Vec<Sample>,
+    data: Vec<u8>,
 }
-
-// impl AacStream {
-//     fn duration(&self) -> u32 {
-//         let mut duration = 0;
-//         for p in &self.packets {
-//             let header = track_try_unwrap!(aac::AdtsHeader::read_from(&p.data[..]));
-//             duration += header.duration();
-//         }
-//         duration
-//     }
-//     fn timescale(&self) -> u32 {
-//         // TDOO:
-//         let header = track_try_unwrap!(aac::AdtsHeader::read_from(&self.packets[0].data[..]));
-//         header.timescale()
-//     }
-//     fn channels(&self) -> u16 {
-//         // TDOO:
-//         let header = track_try_unwrap!(aac::AdtsHeader::read_from(&self.packets[0].data[..]));
-//         header.channel_configuration as u16
-//     }
-//     fn adts_header(&self) -> aac::AdtsHeader {
-//         // TDOO:
-//         track_try_unwrap!(aac::AdtsHeader::read_from(&self.packets[0].data[..]))
-//     }
-// }
+impl AacStream {
+    fn duration(&self) -> u64 {
+        1024 * self.samples.len() as u64
+    }
+}
 
 fn read_avc_aac_stream<R: ReadTsPacket>(ts_reader: R) -> Result<(AvcStream, AacStream)> {
     let mut avc_stream: Option<AvcStream> = None;
     let mut aac_stream: Option<AacStream> = None;
+    let mut avc_timestamps = Vec::new();
+    let mut avc_timestamp_offset = 0;
 
     let mut reader = PesPacketReader::new(TsPacketReader::new(ts_reader));
     while let Some(pes) = track!(reader.read_pes_packet().map_err(Error::from))? {
@@ -79,11 +183,19 @@ fn read_avc_aac_stream<R: ReadTsPacket>(ts_reader: R) -> Result<(AvcStream, AacS
             track_assert!(pes.header.data_alignment_indicator, ErrorKind::Unsupported);
 
             let pts = track_assert_some!(pes.header.pts, ErrorKind::InvalidInput);
-            if let Some(ref mut avc_stream) = avc_stream {
-                avc_stream.min_pts = cmp::min(pts, avc_stream.min_pts);
-                avc_stream.max_pts = cmp::min(pts, avc_stream.max_pts);
-                avc_stream.packets.push(pes);
-            } else {
+            let dts = track_assert_some!(pes.header.dts, ErrorKind::InvalidInput);
+
+            let i = avc_timestamps.len();
+            let mut timestamp = pts.as_u64();
+            if i == 0 {
+                avc_timestamp_offset = timestamp;
+            }
+            if timestamp < avc_timestamp_offset {
+                timestamp += Timestamp::MAX;
+            }
+            avc_timestamps.push((timestamp - avc_timestamp_offset, i));
+
+            if avc_stream.is_none() {
                 let mut sps = None;
                 let mut pps = None;
                 let mut stream_info = None;
@@ -115,23 +227,74 @@ fn read_avc_aac_stream<R: ReadTsPacket>(ts_reader: R) -> Result<(AvcStream, AacS
                     },
                     width: stream_info.width(),
                     height: stream_info.height(),
-                    min_pts: pts,
-                    max_pts: pts,
-                    packets: vec![pes],
+                    samples: Vec::new(),
+                    data: Vec::new(),
                 });
             }
+
+            let avc_stream = avc_stream.as_mut().expect("Never fails");
+            let prev_data_len = avc_stream.data.len();
+            for nal_unit in track!(ByteStreamFormatNalUnits::new(&pes.data))? {
+                avc_stream
+                    .data
+                    .write_u32::<BigEndian>(nal_unit.len() as u32)
+                    .unwrap();
+                avc_stream.data.write_all(nal_unit).unwrap();
+            }
+
+            let sample_size = (avc_stream.data.len() - prev_data_len) as u32;
+            let sample_composition_time_offset = (pts.as_u64() as i64 - dts.as_u64() as i64) as i32;
+            avc_stream.samples.push(Sample {
+                duration: None, // dummy
+                size: Some(sample_size),
+                flags: None,
+                composition_time_offset: Some(sample_composition_time_offset),
+            });
         } else {
             track_assert!(pes.header.stream_id.is_audio(), ErrorKind::InvalidInput);
             track_assert_eq!(stream_type, StreamType::AdtsAac, ErrorKind::Unsupported);
-            if let Some(ref mut aac_stream) = aac_stream {
-                aac_stream.packets.push(pes);
-            } else {
+            if aac_stream.is_none() {
+                let adts_header = track!(AdtsHeader::read_from(&pes.data[..]))?;
+                aac_stream = Some(AacStream {
+                    adts_header,
+                    samples: Vec::new(),
+                    data: Vec::new(),
+                });
+            }
+
+            let aac_stream = aac_stream.as_mut().expect("Never fails");
+            let mut bytes = &pes.data[..];
+            while !bytes.is_empty() {
+                let header = track!(AdtsHeader::read_from(&mut bytes))?;
+                track_assert_eq!(header.duration(), 1024, ErrorKind::Unsupported);
+
+                let sample_size = header.frame_len_exclude_header();
+                aac_stream.samples.push(Sample {
+                    duration: None,
+                    size: Some(u32::from(sample_size)),
+                    flags: None,
+                    composition_time_offset: None,
+                });
+                aac_stream
+                    .data
+                    .extend_from_slice(&bytes[..sample_size as usize]);
+                bytes = &bytes[sample_size as usize..];
             }
         }
     }
 
-    let avc_stream = track_assert_some!(avc_stream, ErrorKind::InvalidInput);
+    let mut avc_stream = track_assert_some!(avc_stream, ErrorKind::InvalidInput);
     let aac_stream = track_assert_some!(aac_stream, ErrorKind::InvalidInput);
+
+    avc_timestamps.sort();
+    for (&(curr, i), &(next, _)) in avc_timestamps.iter().zip(avc_timestamps.iter().skip(1)) {
+        let duration = next - curr;
+        avc_stream.samples[i].duration = Some(duration as u32);
+        if i == avc_timestamps.len() - 2 {
+            avc_stream.samples[i + 1].duration = Some(duration as u32);
+        }
+    }
+
     Ok((avc_stream, aac_stream))
 }
 

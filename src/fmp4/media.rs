@@ -96,7 +96,8 @@ pub struct TrackFragmentBox {
     pub trun_box: TrackRunBox,
 }
 impl TrackFragmentBox {
-    pub fn new(track_id: u32) -> Self {
+    pub fn new(is_video: bool) -> Self {
+        let track_id = if is_video { 1 } else { 2 };
         TrackFragmentBox {
             tfhd_box: TrackFragmentHeaderBox::new(track_id),
             tfdt_box: TrackFragmentBaseMediaDecodeTimeBox,

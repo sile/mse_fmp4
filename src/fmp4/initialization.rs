@@ -663,7 +663,7 @@ impl Mp4Box for Mpeg4EsDescriptorBox {
         write_u8!(writer, 2); // descriptor_len
         write_u16!(
             writer,
-            ((self.profile as u16 + 1) << 11) | ((self.frequency as u16) << 7)
+            ((self.profile as u16 + 1) << 11) | (u16::from(self.frequency.as_index()) << 7)
                 | ((self.channel_configuration as u16) << 3)
         );
 

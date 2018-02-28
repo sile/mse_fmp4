@@ -1,3 +1,11 @@
+//! This is a library for generating fragmented MP4 that playable via Media Source Extensions.
+//!
+//! # References
+//!
+//! - [ISO BMFF Byte Stream Format]
+//!
+//! [ISO BMFF Byte Stream Format]: https://w3c.github.io/media-source/isobmff-byte-stream-format.html
+#![warn(missing_docs)]
 extern crate byteorder;
 extern crate mpeg2ts;
 #[macro_use]

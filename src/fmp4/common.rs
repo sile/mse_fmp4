@@ -25,8 +25,8 @@ pub trait Mp4Box {
         None
     }
     fn write_box<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_all!(writer, &Self::BOX_TYPE);
         write_u32!(writer, track!(self.box_size())?);
+        write_all!(writer, &Self::BOX_TYPE);
 
         let version = self.box_version();
         let flags = self.box_flags();

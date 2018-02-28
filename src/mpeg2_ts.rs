@@ -8,7 +8,7 @@ use mpeg2ts::time::Timestamp;
 use mpeg2ts::ts::{Pid, ReadTsPacket, TsPacket, TsPayload};
 
 use {Error, ErrorKind, Result};
-use aac::AdtsHeader;
+use aac::{self, AdtsHeader};
 use avc::{AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalUnitType,
           SequenceParameterSet};
 use fmp4::{AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSegment,
@@ -59,12 +59,12 @@ fn make_initialization_segment(
     // audio track
     let mut track = TrackBox::new(false);
     track.tkhd_box.duration = u64::from(aac_stream.duration());
-    track.mdia_box.mdhd_box.timescale = aac_stream.adts_header.timescale();
+    track.mdia_box.mdhd_box.timescale = aac_stream.adts_header.sampling_frequency.as_u32();
     track.mdia_box.mdhd_box.duration = track.tkhd_box.duration;
 
     let aac_sample_entry = AacSampleEntry {
         channels: aac_stream.adts_header.channel_configuration as u16,
-        sample_rate: aac_stream.adts_header.timescale() as u16,
+        sample_rate: aac_stream.adts_header.sampling_frequency.as_u32() as u16,
         esds_box: Mpeg4EsDescriptorBox {
             profile: aac_stream.adts_header.profile,
             frequency: aac_stream.adts_header.sampling_frequency,
@@ -112,7 +112,7 @@ fn make_media_segment(avc_stream: AvcStream, aac_stream: AacStream) -> Result<Me
 
     // audio traf
     let mut traf = TrackFragmentBox::new(false);
-    traf.tfhd_box.default_sample_duration = Some(1024);
+    traf.tfhd_box.default_sample_duration = Some(aac::SAMPLES_IN_FRAME as u32);
     traf.trun_box.data_offset = Some(0); // dummy
     traf.trun_box.samples = aac_stream.samples;
     segment.moof_box.traf_boxes.push(traf);
@@ -160,7 +160,7 @@ struct AacStream {
 }
 impl AacStream {
     fn duration(&self) -> u64 {
-        1024 * self.samples.len() as u64
+        aac::SAMPLES_IN_FRAME as u64 * self.samples.len() as u64
     }
 }
 
@@ -266,9 +266,8 @@ fn read_avc_aac_stream<R: ReadTsPacket>(ts_reader: R) -> Result<(AvcStream, AacS
             let mut bytes = &pes.data[..];
             while !bytes.is_empty() {
                 let header = track!(AdtsHeader::read_from(&mut bytes))?;
-                track_assert_eq!(header.duration(), 1024, ErrorKind::Unsupported);
 
-                let sample_size = header.frame_len_exclude_header();
+                let sample_size = header.raw_data_blocks_len();
                 aac_stream.samples.push(Sample {
                     duration: None,
                     size: Some(u32::from(sample_size)),

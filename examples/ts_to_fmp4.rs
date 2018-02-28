@@ -37,6 +37,30 @@ impl AvcStream {
 struct AacStream {
     packets: Vec<PesPacket<Vec<u8>>>,
 }
+impl AacStream {
+    fn duration(&self) -> u32 {
+        let mut duration = 0;
+        for p in &self.packets {
+            let header = track_try_unwrap!(aac::AdtsHeader::read_from(&p.data[..]));
+            duration += header.duration();
+        }
+        duration
+    }
+    fn timescale(&self) -> u32 {
+        // TDOO:
+        let header = track_try_unwrap!(aac::AdtsHeader::read_from(&self.packets[0].data[..]));
+        header.timescale()
+    }
+    fn channels(&self) -> u16 {
+        // TDOO:
+        let header = track_try_unwrap!(aac::AdtsHeader::read_from(&self.packets[0].data[..]));
+        header.channel_configuration as u16
+    }
+    fn adts_header(&self) -> aac::AdtsHeader {
+        // TDOO:
+        track_try_unwrap!(aac::AdtsHeader::read_from(&self.packets[0].data[..]))
+    }
+}
 
 fn read_avc_aac_stream() -> mse_fmp4::Result<(AvcStream, AacStream)> {
     let mut avc_stream = AvcStream {
@@ -71,14 +95,14 @@ fn read_avc_aac_stream() -> mse_fmp4::Result<(AvcStream, AacStream)> {
         if !pes.header.stream_id.is_video() {
             track_assert!(pes.header.stream_id.is_audio(), ErrorKind::InvalidInput);
             track_assert_eq!(stream_type, StreamType::AdtsAac, ErrorKind::Unsupported);
-            {
-                let mut reader = &pes.data[..];
-                while !reader.is_empty() {
-                    let header = track!(aac::AdtsHeader::read_from(&mut reader))?;
-                    println!("@ {:?}", header);
-                    reader = &reader[header.frame_len_exclude_header() as usize..];
-                }
-            }
+            // {
+            //     let mut reader = &pes.data[..];
+            //     while !reader.is_empty() {
+            //         let header = track!(aac::AdtsHeader::read_from(&mut reader))?;
+            //         println!("@ {:?}", header);
+            //         reader = &reader[header.frame_len_exclude_header() as usize..];
+            //     }
+            // }
             aac_stream.packets.push(pes);
             continue;
         }
@@ -164,6 +188,7 @@ fn main() {
     init_seg.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
     init_seg.moov_box.mvhd_box.duration = video_duration;
 
+    // video track
     let mut t = fmp4::TrackBox::new(true);
     t.tkhd_box.width = (avc_stream.width.unwrap() as u32) << 16;
     t.tkhd_box.height = (avc_stream.height.unwrap() as u32) << 16;
@@ -184,15 +209,45 @@ fn main() {
         .stsd_box
         .sample_entries
         .push(track_try_unwrap!(avc_sample_entry.to_sample_entry()));
-
     init_seg.moov_box.trak_boxes.push(t);
 
+    // audio track
+    let audio_duration = aac_stream.duration();
+    let mut t = fmp4::TrackBox::new(false);
+    t.tkhd_box.duration = u64::from(audio_duration);
+    t.mdia_box.mdhd_box.timescale = aac_stream.timescale();
+    t.mdia_box.mdhd_box.duration = u64::from(audio_duration);
+
+    let adts_header = aac_stream.adts_header();
+    let aac_sample_entry = fmp4::Mpeg4AudioSampleEntry::new(fmp4::AudioSampleEntry {
+        channels: aac_stream.channels(),
+        sample_rate: aac_stream.timescale() as u16,
+        esds_box: fmp4::Mpeg4EsDescriptorBox {
+            profile: adts_header.profile,
+            frequency: adts_header.sampling_frequency,
+            channel_configuration: adts_header.channel_configuration,
+        },
+    });
+    t.mdia_box
+        .minf_box
+        .stbl_box
+        .stsd_box
+        .sample_entries
+        .push(track_try_unwrap!(aac_sample_entry.to_sample_entry()));
+    init_seg.moov_box.trak_boxes.push(t);
+
+    //
     init_seg.moov_box.mvex_box.mehd_box.fragment_duration = video_duration;
     init_seg
         .moov_box
         .mvex_box
         .trex_boxes
         .push(fmp4::TrackExtendsBox::new(1));
+    init_seg
+        .moov_box
+        .mvex_box
+        .trex_boxes
+        .push(fmp4::TrackExtendsBox::new(2));
     {
         let out = track_try_unwrap!(
             File::create(format!("{}-init.mp4", output_file_prefix))

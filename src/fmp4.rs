@@ -3,16 +3,20 @@ use std::io::{self, Write};
 use byteorder::{BigEndian, WriteBytesExt};
 
 use {ErrorKind, Result};
+use aac;
 use isobmff::{BoxHeader, BoxType, Brand, FullBoxHeader, HandlerType, SampleEntry};
 
-// macro_rules! write_u8 {
-//     ($w:expr, $n:expr) => { track_io!($w.write_u8($n))?; }
-// }
+macro_rules! write_u8 {
+    ($w:expr, $n:expr) => { track_io!($w.write_u8($n))?; }
+}
 macro_rules! write_u16 {
     ($w:expr, $n:expr) => { track_io!($w.write_u16::<BigEndian>($n))?; }
 }
 macro_rules! write_i16 {
     ($w:expr, $n:expr) => { track_io!($w.write_i16::<BigEndian>($n))?; }
+}
+macro_rules! write_u24 {
+    ($w:expr, $n:expr) => { track_io!($w.write_uint::<BigEndian>($n as u64, 3))?; }
 }
 macro_rules! write_u32 {
     ($w:expr, $n:expr) => { track_io!($w.write_u32::<BigEndian>($n))?; }
@@ -688,6 +692,103 @@ impl WriteBoxTo for AvcConfigurationBox {
 impl WriteTo for AvcConfigurationBox {
     fn write_to<W: Write>(&self, writer: W) -> Result<()> {
         track!(self.config.write_to(writer))
+    }
+}
+
+// ISO/IEC 14496-1
+#[derive(Debug, Clone)]
+pub struct Mpeg4EsDescriptorBox {
+    pub profile: aac::AacProfile,
+    pub frequency: aac::SamplingFrequency,
+    pub channel_configuration: aac::ChannelConfiguration,
+    // the maximum bitrate of this elementary stream in any time window of one second duration.
+    // TODO: max_bitrate
+}
+impl WriteBoxTo for Mpeg4EsDescriptorBox {
+    fn box_type(&self) -> BoxType {
+        BoxType(*b"esds")
+    }
+    fn full_box_header(&self) -> Option<FullBoxHeader> {
+        Some(FullBoxHeader::new(0, 0))
+    }
+}
+impl WriteTo for Mpeg4EsDescriptorBox {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        // es descriptor
+        write_u8!(writer, 0x03); // descriptor_tag=es
+        write_u8!(writer, 25); // descriptor_len
+        write_u16!(writer, 0); // es_id (TODO)
+        write_u8!(writer, 0); // stream_priority and flags
+
+        // decoder configuration descriptor
+        write_u8!(writer, 0x04); // descriptor_tag=decoder_configuration
+        write_u8!(writer, 17); // descriptor_len
+
+        write_u8!(writer, 0x40); // object_type
+        write_u8!(writer, (5 << 2) | 1); // stream_type=audio=5, upstream=0, reserved=1
+        write_u24!(writer, 0); // buffer_size
+        write_u32!(writer, 0); // max_bitrate (TODO)
+        write_u32!(writer, 0); // avg_bitrate (TODO)
+
+        // decoder specific info
+        write_u8!(writer, 0x05); // descriptor_tag=decoder_specific_info
+        write_u8!(writer, 2); // descriptor_len
+        write_u16!(
+            writer,
+            ((self.profile as u16 + 1) << 11) | ((self.frequency as u16) << 7)
+                | ((self.channel_configuration as u16) << 3)
+        );
+
+        // sl configuration descriptor
+        write_u8!(writer, 0x06); // descriptor_tag=es_configuration_descriptor
+        write_u8!(writer, 1); // descriptor_len
+        write_u8!(writer, 2); // MP4
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AudioSampleEntry {
+    pub channels: u16,
+    pub sample_rate: u16,
+    pub esds_box: Mpeg4EsDescriptorBox,
+}
+impl WriteTo for AudioSampleEntry {
+    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_zeroes!(writer, 8);
+        track_assert!(
+            self.channels == 1 || self.channels == 2,
+            ErrorKind::Unsupported
+        );
+        write_u16!(writer, self.channels);
+        write_u16!(writer, 16);
+        write_zeroes!(writer, 4);
+        write_u16!(writer, self.sample_rate);
+        write_zeroes!(writer, 2);
+
+        write_box!(writer, self.esds_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Mpeg4AudioSampleEntry {
+    pub audio_sample_entry: AudioSampleEntry,
+}
+impl Mpeg4AudioSampleEntry {
+    pub fn new(audio_sample_entry: AudioSampleEntry) -> Self {
+        Mpeg4AudioSampleEntry { audio_sample_entry }
+    }
+    pub fn to_sample_entry(&self) -> Result<SampleEntry> {
+        use isobmff::SampleFormat;
+        let mut data = Vec::new();
+        track!(self.audio_sample_entry.write_to(&mut data))?;
+        Ok(SampleEntry {
+            format: SampleFormat(*b"mp4a"),
+            data_reference_index: 1,
+            data,
+        })
     }
 }
 

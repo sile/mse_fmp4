@@ -16,7 +16,6 @@ pub use error::{Error, ErrorKind};
 pub mod aac;
 pub mod avc;
 pub mod fmp4;
-pub mod isobmff;
 
 mod error;
 

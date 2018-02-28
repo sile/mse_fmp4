@@ -16,6 +16,13 @@ pub struct InitializationSegment {
     pub ftyp_box: FileTypeBox,
     pub moov_box: MovieBox,
 }
+impl InitializationSegment {
+    /// Returns MIME type.
+    pub fn mime_type(&self) -> String {
+        // FIXME
+        r#"video/mp4; "avc1.640029, mp4a.40.2""#.to_string()
+    }
+}
 impl WriteTo for InitializationSegment {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.ftyp_box);

@@ -257,7 +257,10 @@ fn main() {
     }
 
     let mut media_seg = fmp4::MediaSegment::new();
-    let mut mdat = fmp4::MediaDataBox { data: Vec::new() };
+    let mut video_mdat = fmp4::MediaDataBox { data: Vec::new() };
+    let mut audio_mdat = fmp4::MediaDataBox { data: Vec::new() };
+
+    // video traf
     let mut traf = fmp4::TrackFragmentBox::new(1);
     // traf.tfhd_box.default_sample_duration =
     //     Some(video_duration as u32 / avc_stream.packets.len() as u32); // TODO
@@ -289,14 +292,15 @@ fn main() {
     let mut prev_pts: Option<Timestamp> = None;
     for pes in &avc_stream.packets {
         let nal_units = track_try_unwrap!(avc::ByteStreamFormatNalUnits::new(&pes.data));
-        let mdat_start = mdat.data.len();
+        let mdat_start = video_mdat.data.len();
         for nal_unit in nal_units {
-            mdat.data
+            video_mdat
+                .data
                 .write_u32::<BigEndian>(nal_unit.len() as u32)
                 .unwrap();
-            mdat.data.write_all(nal_unit).unwrap();
+            video_mdat.data.write_all(nal_unit).unwrap();
         }
-        let sample_size = (mdat.data.len() - mdat_start) as u32;
+        let sample_size = (video_mdat.data.len() - mdat_start) as u32;
 
         let pts = pes.header.pts.unwrap();
         let dts = pes.header.dts.unwrap();
@@ -319,11 +323,43 @@ fn main() {
         prev_pts = Some(pts);
     }
     media_seg.moof_box.traf_boxes.push(traf);
+
+    // audio traf
+    let mut traf = fmp4::TrackFragmentBox::new(2);
+    traf.tfhd_box.default_sample_duration = Some(1024); // TODO
+    traf.trun_box.data_offset = Some(0); // dummy
+    for pes in &aac_stream.packets {
+        let mut reader = &pes.data[..];
+        while !reader.is_empty() {
+            let adts_header = track_try_unwrap!(aac::AdtsHeader::read_from(&mut reader));
+            let sample_size = adts_header.frame_len_exclude_header();
+            let entry = fmp4::TrunEntry {
+                sample_duration: None,
+                sample_size: Some(u32::from(sample_size)),
+                sample_flags: None,
+                sample_composition_time_offset: None,
+            };
+            traf.trun_box.entries.push(entry);
+
+            audio_mdat
+                .data
+                .extend_from_slice(&reader[..sample_size as usize]);
+            reader = &reader[sample_size as usize..];
+        }
+    }
+    media_seg.moof_box.traf_boxes.push(traf);
+
+    //
     let mut counter = fmp4::WriteBytesCounter::new();
     media_seg.moof_box.write_box_to(&mut counter).unwrap();
     media_seg.moof_box.traf_boxes[0].trun_box.data_offset = Some(counter.count() as i32 + 8);
 
-    media_seg.mdat_boxes.push(mdat);
+    media_seg.mdat_boxes.push(video_mdat);
+
+    media_seg.mdat_boxes[0].write_box_to(&mut counter).unwrap();
+    media_seg.moof_box.traf_boxes[1].trun_box.data_offset = Some(counter.count() as i32 + 8);
+
+    media_seg.mdat_boxes.push(audio_mdat);
     {
         let out = track_try_unwrap!(
             File::create(format!("{}.m4s", output_file_prefix))

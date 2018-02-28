@@ -11,8 +11,9 @@ use std::io::{Read, Write};
 use byteorder::{BigEndian, WriteBytesExt};
 use clap::{App, Arg};
 use mpeg2ts::time::Timestamp;
-use mse_fmp4::fmp4::{self, WriteBoxTo, WriteTo};
+use mse_fmp4::fmp4::{self, WriteBoxTo};
 use mse_fmp4::{aac, avc};
+use mse_fmp4::io::{ByteCounter, WriteTo};
 use mse_fmp4::ErrorKind;
 use mpeg2ts::pes::{PesPacket, PesPacketReader, ReadPesPacket};
 use mpeg2ts::es::{StreamId, StreamType};
@@ -350,7 +351,7 @@ fn main() {
     media_seg.moof_box.traf_boxes.push(traf);
 
     //
-    let mut counter = fmp4::WriteBytesCounter::new();
+    let mut counter = ByteCounter::with_sink();
     media_seg.moof_box.write_box_to(&mut counter).unwrap();
     media_seg.moof_box.traf_boxes[0].trun_box.data_offset = Some(counter.count() as i32 + 8);
 

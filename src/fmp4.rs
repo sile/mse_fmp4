@@ -1,11 +1,12 @@
 use std::ffi::CString;
 use std::fmt;
-use std::io::{self, Write};
+use std::io::Write;
 use std::str;
 use byteorder::{BigEndian, WriteBytesExt};
 
 use {ErrorKind, Result};
 use aac;
+use io::{ByteCounter, WriteTo};
 
 macro_rules! write_u8 {
     ($w:expr, $n:expr) => { track_io!($w.write_u8($n))?; }
@@ -45,34 +46,10 @@ macro_rules! write_boxes {
     }
 }
 
-#[derive(Debug)]
-pub struct WriteBytesCounter(u64);
-impl WriteBytesCounter {
-    pub fn new() -> Self {
-        WriteBytesCounter(0)
-    }
-    pub fn count(&self) -> u64 {
-        self.0
-    }
-}
-impl Write for WriteBytesCounter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0 += buf.len() as u64;
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-pub trait WriteTo {
-    fn write_to<W: Write>(&self, writer: W) -> Result<()>;
-}
-
 pub trait WriteBoxTo: WriteTo {
     fn box_type(&self) -> BoxType;
     fn box_size(&self) -> u32 {
-        let mut writer = WriteBytesCounter::new();
+        let mut writer = ByteCounter::with_sink();
         track_try_unwrap!(self.write_to(&mut writer));
 
         let mut size = 8 + writer.count() as u32;

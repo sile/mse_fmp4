@@ -4,21 +4,17 @@ use std::io::Write;
 use {ErrorKind, Result};
 use aac::{AacProfile, ChannelConfiguration, SamplingFrequency};
 use avc::AvcDecoderConfigurationRecord;
-use fmp4::Mp4Box;
+use fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
 use io::WriteTo;
 
-#[derive(Debug)]
+/// [3. Initialization Segments][init_segment] (ISO BMFF Byte Stream Format)
+///
+/// [init_segment]: https://w3c.github.io/media-source/isobmff-byte-stream-format.html#iso-init-segments
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
 pub struct InitializationSegment {
     pub ftyp_box: FileTypeBox,
     pub moov_box: MovieBox,
-}
-impl InitializationSegment {
-    pub fn new() -> Self {
-        InitializationSegment {
-            ftyp_box: FileTypeBox,
-            moov_box: MovieBox::new(),
-        }
-    }
 }
 impl WriteTo for InitializationSegment {
     fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
@@ -28,7 +24,9 @@ impl WriteTo for InitializationSegment {
     }
 }
 
-#[derive(Debug)]
+/// 4.3 File Type Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
 pub struct FileTypeBox;
 impl Mp4Box for FileTypeBox {
     const BOX_TYPE: [u8; 4] = *b"ftyp";
@@ -40,53 +38,36 @@ impl Mp4Box for FileTypeBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.2.1 Movie Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
 pub struct MovieBox {
     pub mvhd_box: MovieHeaderBox,
     pub trak_boxes: Vec<TrackBox>,
-}
-impl MovieBox {
-    pub fn new() -> Self {
-        MovieBox {
-            mvhd_box: MovieHeaderBox::new(),
-            trak_boxes: Vec::new(),
-        }
-    }
 }
 impl Mp4Box for MovieBox {
     const BOX_TYPE: [u8; 4] = *b"moov";
 
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         track_assert!(!self.trak_boxes.is_empty(), ErrorKind::InvalidInput);
-
         write_box!(writer, self.mvhd_box);
         write_boxes!(writer, &self.trak_boxes);
         Ok(())
     }
 }
 
+/// 8.2.2 Movie Header Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct MovieHeaderBox {
-    pub creation_time: u64, // TODO: u32(?)
-    pub modification_time: u64,
     pub timescale: u32,
-    pub duration: u64,
-    pub rate: i32,   // fixed point 16.16
-    pub volume: i16, // fixed point 8.8
-    pub matrix: [i32; 9],
-    pub next_track_id: u32, // 0xFFFF_FFFF means ...
+    pub duration: u32,
 }
-impl MovieHeaderBox {
-    pub fn new() -> Self {
+impl Default for MovieHeaderBox {
+    fn default() -> Self {
         MovieHeaderBox {
-            creation_time: 0,
-            modification_time: 0,
-            timescale: 1, // FIXME
-            duration: 1,  // FIXME
-            rate: 65536,
-            volume: 256,
-            matrix: [65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824],
-            next_track_id: 0xFFFF_FFFF,
+            timescale: 1,
+            duration: 1,
         }
     }
 }
@@ -94,26 +75,28 @@ impl Mp4Box for MovieHeaderBox {
     const BOX_TYPE: [u8; 4] = *b"mvhd";
 
     fn box_version(&self) -> Option<u8> {
-        Some(1)
+        Some(0)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u64!(writer, self.creation_time);
-        write_u64!(writer, self.modification_time);
+        write_u32!(writer, 0); // creation_time
+        write_u32!(writer, 0); // modification_time
         write_u32!(writer, self.timescale);
-        write_u64!(writer, self.duration);
-        write_i32!(writer, self.rate);
-        write_i16!(writer, self.volume);
+        write_u32!(writer, self.duration);
+        write_i32!(writer, 65536); // rate
+        write_i16!(writer, 256); // volume
         write_zeroes!(writer, 2);
         write_zeroes!(writer, 4 * 2);
-        for &x in &self.matrix {
-            write_i32!(writer, x);
+        for &x in &[65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824] {
+            write_i32!(writer, x); // matrix
         }
         write_zeroes!(writer, 4 * 6);
-        write_u32!(writer, self.next_track_id);
+        write_u32!(writer, 0xFFFF_FFFF); // next_track_id
         Ok(())
     }
 }
 
+/// 8.3.1 Track Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct TrackBox {
     pub tkhd_box: TrackHeaderBox,
@@ -121,6 +104,7 @@ pub struct TrackBox {
     pub mdia_box: MediaBox,
 }
 impl TrackBox {
+    /// Makes a new `TrackBox` instance.
     pub fn new(is_video: bool) -> Self {
         TrackBox {
             tkhd_box: TrackHeaderBox::new(is_video),
@@ -138,38 +122,26 @@ impl Mp4Box for TrackBox {
     }
 }
 
+/// 8.3.2 Track Header Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct TrackHeaderBox {
-    pub track_enabled: bool,
-    pub track_in_movie: bool,
-    pub track_in_preview: bool,
-    pub track_size_is_aspect_ratio: bool,
-    pub creation_time: u64,
-    pub modification_time: u64,
-    pub track_id: u32,
-    pub duration: u64,
-    pub layer: i16,
-    pub alternate_group: i16,
-    pub volume: i16, // fixed point 8.8
-    pub matrix: [i32; 9],
+    track_id: u32,
+    pub duration: u32,
+    volume: i16,     // fixed point 8.8
     pub width: u32,  // fixed point 16.16
     pub height: u32, // fixed point 16.16
 }
 impl TrackHeaderBox {
-    pub fn new(is_video: bool) -> Self {
+    fn new(is_video: bool) -> Self {
         TrackHeaderBox {
-            track_enabled: true,
-            track_in_movie: true,
-            track_in_preview: true,
-            track_size_is_aspect_ratio: false,
-            creation_time: 0,
-            modification_time: 0,
-            track_id: if is_video { 1 } else { 2 },
-            duration: 1, // FIXME
-            layer: 0,
-            alternate_group: 0,
+            track_id: if is_video {
+                VIDEO_TRACK_ID
+            } else {
+                AUDIO_TRACK_ID
+            },
+            duration: 1,
             volume: if is_video { 0 } else { 256 },
-            matrix: [65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824],
             width: 0,
             height: 0,
         }
@@ -179,28 +151,26 @@ impl Mp4Box for TrackHeaderBox {
     const BOX_TYPE: [u8; 4] = *b"tkhd";
 
     fn box_version(&self) -> Option<u8> {
-        Some(1)
+        Some(0)
     }
     fn box_flags(&self) -> Option<u32> {
-        let flags = (self.track_enabled as u32 * 0x00_0001)
-            | (self.track_in_movie as u32 * 0x00_0002)
-            | (self.track_in_preview as u32 * 0x00_0004)
-            | (self.track_size_is_aspect_ratio as u32 * 0x00_0008);
+        // track_enabled | track_in_movie | track_in_preview
+        let flags = 0x00_0001 | 0x00_0002 | 0x00_0004;
         Some(flags)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u64!(writer, self.creation_time);
-        write_u64!(writer, self.modification_time);
+        write_u32!(writer, 0); // creation_time
+        write_u32!(writer, 0); // modification_time
         write_u32!(writer, self.track_id);
         write_zeroes!(writer, 4);
-        write_u64!(writer, self.duration);
+        write_u32!(writer, self.duration);
         write_zeroes!(writer, 4 * 2);
-        write_i16!(writer, self.layer);
-        write_i16!(writer, self.alternate_group);
+        write_i16!(writer, 0); // layer
+        write_i16!(writer, 0); // alternate_group
         write_i16!(writer, self.volume);
         write_zeroes!(writer, 2);
-        for &x in &self.matrix {
-            write_i32!(writer, x);
+        for &x in &[65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824] {
+            write_i32!(writer, x); // matrix
         }
         write_u32!(writer, self.width);
         write_u32!(writer, self.height);
@@ -208,6 +178,8 @@ impl Mp4Box for TrackHeaderBox {
     }
 }
 
+/// 8.4.1 Media Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct MediaBox {
     pub mdhd_box: MediaHeaderBox,
@@ -215,9 +187,9 @@ pub struct MediaBox {
     pub minf_box: MediaInformationBox,
 }
 impl MediaBox {
-    pub fn new(is_video: bool) -> Self {
+    fn new(is_video: bool) -> Self {
         MediaBox {
-            mdhd_box: MediaHeaderBox::new(),
+            mdhd_box: MediaHeaderBox::default(),
             hdlr_box: HandlerReferenceBox::new(is_video),
             minf_box: MediaInformationBox::new(is_video),
         }
@@ -234,22 +206,18 @@ impl Mp4Box for MediaBox {
     }
 }
 
+/// 8.4.2 Media Header Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct MediaHeaderBox {
-    pub creation_time: u64,
-    pub modification_time: u64,
     pub timescale: u32,
-    pub duration: u64,
-    pub language: u16,
+    pub duration: u32,
 }
-impl MediaHeaderBox {
-    pub fn new() -> Self {
+impl Default for MediaHeaderBox {
+    fn default() -> Self {
         MediaHeaderBox {
-            creation_time: 0,
-            modification_time: 0,
-            timescale: 0, // FIXME
-            duration: 1,  // FIXME
-            language: 21956,
+            timescale: 0,
+            duration: 1,
         }
     }
 }
@@ -257,26 +225,27 @@ impl Mp4Box for MediaHeaderBox {
     const BOX_TYPE: [u8; 4] = *b"mdhd";
 
     fn box_version(&self) -> Option<u8> {
-        Some(1)
+        Some(0)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u64!(writer, self.creation_time);
-        write_u64!(writer, self.modification_time);
+        write_u32!(writer, 0); // creation_time
+        write_u32!(writer, 0); // modification_time
         write_u32!(writer, self.timescale);
-        write_u64!(writer, self.duration);
-        write_u16!(writer, self.language);
+        write_u32!(writer, self.duration);
+        write_u16!(writer, 21956); // language
         write_zeroes!(writer, 2);
         Ok(())
     }
 }
 
+/// 8.4.3 Handler Reference Box (ISO/IEC 14496-12).
 #[derive(Debug)]
 pub struct HandlerReferenceBox {
-    pub handler_type: [u8; 4],
-    pub name: CString,
+    handler_type: [u8; 4],
+    name: CString,
 }
 impl HandlerReferenceBox {
-    pub fn new(is_video: bool) -> Self {
+    fn new(is_video: bool) -> Self {
         let name = if is_video {
             "Video Handler"
         } else {
@@ -303,6 +272,8 @@ impl Mp4Box for HandlerReferenceBox {
     }
 }
 
+/// 8.4.4 Media Information Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct MediaInformationBox {
     pub vmhd_box: Option<VideoMediaHeaderBox>,
@@ -311,7 +282,7 @@ pub struct MediaInformationBox {
     pub stbl_box: SampleTableBox,
 }
 impl MediaInformationBox {
-    pub fn new(is_video: bool) -> Self {
+    fn new(is_video: bool) -> Self {
         MediaInformationBox {
             vmhd_box: if is_video {
                 Some(VideoMediaHeaderBox)
@@ -323,8 +294,8 @@ impl MediaInformationBox {
             } else {
                 None
             },
-            dinf_box: DataInformationBox::new(),
-            stbl_box: SampleTableBox::new(),
+            dinf_box: DataInformationBox::default(),
+            stbl_box: SampleTableBox::default(),
         }
     }
 }
@@ -344,6 +315,7 @@ impl Mp4Box for MediaInformationBox {
     }
 }
 
+/// 12.1.2 Video media header (ISO/IEC 14496-12).
 #[derive(Debug)]
 pub struct VideoMediaHeaderBox;
 impl Mp4Box for VideoMediaHeaderBox {
@@ -359,6 +331,7 @@ impl Mp4Box for VideoMediaHeaderBox {
     }
 }
 
+/// 12.2.2 Sound media header (ISO/IEC 14496-12).
 #[derive(Debug)]
 pub struct SoundMediaHeaderBox;
 impl Mp4Box for SoundMediaHeaderBox {
@@ -374,16 +347,11 @@ impl Mp4Box for SoundMediaHeaderBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.7.1 Data Information Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
 pub struct DataInformationBox {
     pub dref_box: DataReferenceBox,
-}
-impl DataInformationBox {
-    pub fn new() -> Self {
-        DataInformationBox {
-            dref_box: DataReferenceBox::new(),
-        }
-    }
 }
 impl Mp4Box for DataInformationBox {
     const BOX_TYPE: [u8; 4] = *b"dinf";
@@ -394,16 +362,11 @@ impl Mp4Box for DataInformationBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.7.2 Data Reference Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
 pub struct DataReferenceBox {
     pub url_box: DataEntryUrlBox,
-}
-impl DataReferenceBox {
-    pub fn new() -> Self {
-        DataReferenceBox {
-            url_box: DataEntryUrlBox,
-        }
-    }
 }
 impl Mp4Box for DataReferenceBox {
     const BOX_TYPE: [u8; 4] = *b"dref";
@@ -418,7 +381,8 @@ impl Mp4Box for DataReferenceBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.7.2.2 Data Entry Url Box (ISO/IEC 14496-12).
+#[derive(Debug, Default)]
 pub struct DataEntryUrlBox;
 impl Mp4Box for DataEntryUrlBox {
     const BOX_TYPE: [u8; 4] = *b"url ";
@@ -432,24 +396,15 @@ impl Mp4Box for DataEntryUrlBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.5.1 Sample Table Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
 pub struct SampleTableBox {
     pub stsd_box: SampleDescriptionBox,
     pub stts_box: TimeToSampleBox,
     pub stsc_box: SampleToChunkBox,
     pub stsz_box: SampleSizeBox,
     pub stco_box: ChunkOffsetBox,
-}
-impl SampleTableBox {
-    pub fn new() -> Self {
-        SampleTableBox {
-            stsd_box: SampleDescriptionBox::new(),
-            stts_box: TimeToSampleBox,
-            stsc_box: SampleToChunkBox,
-            stsz_box: SampleSizeBox,
-            stco_box: ChunkOffsetBox,
-        }
-    }
 }
 impl Mp4Box for SampleTableBox {
     const BOX_TYPE: [u8; 4] = *b"stbl";
@@ -464,16 +419,11 @@ impl Mp4Box for SampleTableBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.5.2 Sample Description Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
 pub struct SampleDescriptionBox {
     pub sample_entries: Vec<SampleEntry>,
-}
-impl SampleDescriptionBox {
-    pub fn new() -> Self {
-        SampleDescriptionBox {
-            sample_entries: Vec::new(), // FIXME
-        }
-    }
 }
 impl Mp4Box for SampleDescriptionBox {
     const BOX_TYPE: [u8; 4] = *b"stsd";
@@ -482,13 +432,15 @@ impl Mp4Box for SampleDescriptionBox {
         Some(0)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        track_assert!(!self.sample_entries.is_empty(), ErrorKind::InvalidInput);
         write_u32!(writer, self.sample_entries.len() as u32);
         write_boxes!(writer, &self.sample_entries);
         Ok(())
     }
 }
 
-#[derive(Debug)]
+/// 8.5.3 Sample Size Boxes (ISO/IEC 14496-12).
+#[derive(Debug, Default)]
 pub struct SampleSizeBox;
 impl Mp4Box for SampleSizeBox {
     const BOX_TYPE: [u8; 4] = *b"stsz";
@@ -503,7 +455,8 @@ impl Mp4Box for SampleSizeBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.6.1.2 Decoding Time To Sample Box (ISO/IEC 14496-12).
+#[derive(Debug, Default)]
 pub struct TimeToSampleBox;
 impl Mp4Box for TimeToSampleBox {
     const BOX_TYPE: [u8; 4] = *b"stts";
@@ -517,7 +470,8 @@ impl Mp4Box for TimeToSampleBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.7.5 Chunk Offset Box (ISO/IEC 14496-12).
+#[derive(Debug, Default)]
 pub struct ChunkOffsetBox;
 impl Mp4Box for ChunkOffsetBox {
     const BOX_TYPE: [u8; 4] = *b"stco";
@@ -531,7 +485,8 @@ impl Mp4Box for ChunkOffsetBox {
     }
 }
 
-#[derive(Debug)]
+/// 8.7.4 Sample To Chunk Box (ISO/IEC 14496-12).
+#[derive(Debug, Default)]
 pub struct SampleToChunkBox;
 impl Mp4Box for SampleToChunkBox {
     const BOX_TYPE: [u8; 4] = *b"stsc";
@@ -545,6 +500,8 @@ impl Mp4Box for SampleToChunkBox {
     }
 }
 
+/// 8.5.2.2 Sample Entry (ISO/IEC 14496-12).
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub enum SampleEntry {
     Avc(AvcSampleEntry),
@@ -559,6 +516,8 @@ impl SampleEntry {
     }
 }
 
+/// Sample Entry for AVC.
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct AvcSampleEntry {
     pub width: u16,
@@ -587,6 +546,8 @@ impl Mp4Box for AvcSampleEntry {
     }
 }
 
+/// Box that contains AVC Decoder Configuration Record.
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct AvcConfigurationBox {
     pub configuration: AvcDecoderConfigurationRecord,
@@ -599,10 +560,10 @@ impl Mp4Box for AvcConfigurationBox {
     }
 }
 
+/// Sample Entry for AAC.
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct AacSampleEntry {
-    pub channels: u16,
-    pub sample_rate: u16,
     pub esds_box: Mpeg4EsDescriptorBox,
 }
 impl Mp4Box for AacSampleEntry {
@@ -612,15 +573,16 @@ impl Mp4Box for AacSampleEntry {
         write_zeroes!(writer, 6);
         write_u16!(writer, 1); // data_reference_index
 
+        let channels = self.esds_box.channel_configuration as u16;
+        let sample_rate = self.esds_box.frequency.as_u32();
         write_zeroes!(writer, 8);
-        track_assert!(
-            self.channels == 1 || self.channels == 2,
-            ErrorKind::Unsupported
-        );
-        write_u16!(writer, self.channels);
+        track_assert!(channels == 1 || channels == 2, ErrorKind::Unsupported);
+        track_assert!(sample_rate <= 0xFFFF, ErrorKind::InvalidInput);
+
+        write_u16!(writer, channels);
         write_u16!(writer, 16);
         write_zeroes!(writer, 4);
-        write_u16!(writer, self.sample_rate);
+        write_u16!(writer, sample_rate as u16);
         write_zeroes!(writer, 2);
 
         write_box!(writer, self.esds_box);
@@ -628,7 +590,8 @@ impl Mp4Box for AacSampleEntry {
     }
 }
 
-// ISO/IEC 14496-1
+/// MPEG-4 ES Description Box (ISO/IEC 14496-1).
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub struct Mpeg4EsDescriptorBox {
     pub profile: AacProfile,
@@ -645,7 +608,7 @@ impl Mp4Box for Mpeg4EsDescriptorBox {
         // es descriptor
         write_u8!(writer, 0x03); // descriptor_tag=es
         write_u8!(writer, 25); // descriptor_len
-        write_u16!(writer, 0); // es_id (TODO)
+        write_u16!(writer, 0); // es_id
         write_u8!(writer, 0); // stream_priority and flags
 
         // decoder configuration descriptor

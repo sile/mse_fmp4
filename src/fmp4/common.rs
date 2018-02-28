@@ -3,9 +3,12 @@ use std::io::Write;
 use Result;
 use io::ByteCounter;
 
+/// MP4 (ISO BMFF) box.
 pub trait Mp4Box {
+    /// Box type.
     const BOX_TYPE: [u8; 4];
 
+    /// Box size.
     fn box_size(&self) -> Result<u32> {
         let mut size = 8;
         if self.box_version().is_some() | self.box_flags().is_some() {
@@ -18,12 +21,22 @@ pub trait Mp4Box {
 
         Ok(size)
     }
+
+    /// Box version.
+    ///
+    /// If this method returns `Some(...)`, the box will be regarded as a full box.
     fn box_version(&self) -> Option<u8> {
         None
     }
+
+    /// Box flags (for full box).
+    ///
+    /// If this method returns `Some(...)`, the box will be regarded as a full box.
     fn box_flags(&self) -> Option<u32> {
         None
     }
+
+    /// Writes the box to the given writer.
     fn write_box<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, track!(self.box_size())?);
         write_all!(writer, &Self::BOX_TYPE);
@@ -38,5 +51,7 @@ pub trait Mp4Box {
         track!(self.write_box_payload(writer))?;
         Ok(())
     }
+
+    /// Writes the payload of the box to the given writer.
     fn write_box_payload<W: Write>(&self, writer: W) -> Result<()>;
 }

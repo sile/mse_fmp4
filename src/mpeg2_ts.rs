@@ -1,5 +1,6 @@
 //! MPEG-2 TS related constituent elements.
 use std::collections::HashMap;
+use std::cmp;
 use std::io::Write;
 use byteorder::{BigEndian, WriteBytesExt};
 use mpeg2ts;
@@ -21,7 +22,7 @@ use io::ByteCounter;
 pub fn to_fmp4<R: ReadTsPacket>(reader: R) -> Result<(InitializationSegment, MediaSegment)> {
     let (avc_stream, aac_stream) = track!(read_avc_aac_stream(reader))?;
 
-    let initialization_segment = make_initialization_segment(&avc_stream, &aac_stream);
+    let initialization_segment = track!(make_initialization_segment(&avc_stream, &aac_stream))?;
     let media_segment = track!(make_media_segment(avc_stream, aac_stream))?;
     Ok((initialization_segment, media_segment))
 }
@@ -29,16 +30,19 @@ pub fn to_fmp4<R: ReadTsPacket>(reader: R) -> Result<(InitializationSegment, Med
 fn make_initialization_segment(
     avc_stream: &AvcStream,
     aac_stream: &AacStream,
-) -> InitializationSegment {
-    let mut segment = InitializationSegment::new();
+) -> Result<InitializationSegment> {
+    let video_duration = track!(avc_stream.duration())?;
+    let audio_duration = track!(aac_stream.duration())?;
+
+    let mut segment = InitializationSegment::default();
     segment.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
-    segment.moov_box.mvhd_box.duration = avc_stream.duration();
+    segment.moov_box.mvhd_box.duration = cmp::max(video_duration, audio_duration);
 
     // video track
     let mut track = TrackBox::new(true);
     track.tkhd_box.width = (avc_stream.width as u32) << 16;
     track.tkhd_box.height = (avc_stream.height as u32) << 16;
-    track.tkhd_box.duration = avc_stream.duration();
+    track.tkhd_box.duration = video_duration;
     track.mdia_box.mdhd_box.timescale = Timestamp::RESOLUTION as u32;
     track.mdia_box.mdhd_box.duration = track.tkhd_box.duration;
 
@@ -60,13 +64,11 @@ fn make_initialization_segment(
 
     // audio track
     let mut track = TrackBox::new(false);
-    track.tkhd_box.duration = u64::from(aac_stream.duration());
+    track.tkhd_box.duration = audio_duration;
     track.mdia_box.mdhd_box.timescale = aac_stream.adts_header.sampling_frequency.as_u32();
     track.mdia_box.mdhd_box.duration = track.tkhd_box.duration;
 
     let aac_sample_entry = AacSampleEntry {
-        channels: aac_stream.adts_header.channel_configuration as u16,
-        sample_rate: aac_stream.adts_header.sampling_frequency.as_u32() as u16,
         esds_box: Mpeg4EsDescriptorBox {
             profile: aac_stream.adts_header.profile,
             frequency: aac_stream.adts_header.sampling_frequency,
@@ -82,11 +84,11 @@ fn make_initialization_segment(
         .push(SampleEntry::Aac(aac_sample_entry));
     segment.moov_box.trak_boxes.push(track);
 
-    segment
+    Ok(segment)
 }
 
 fn make_media_segment(avc_stream: AvcStream, aac_stream: AacStream) -> Result<MediaSegment> {
-    let mut segment = MediaSegment::new();
+    let mut segment = MediaSegment::default();
 
     // video traf
     let mut traf = TrackFragmentBox::new(true);
@@ -146,11 +148,16 @@ struct AvcStream {
     data: Vec<u8>,
 }
 impl AvcStream {
-    fn duration(&self) -> u64 {
-        self.samples
-            .iter()
-            .map(|s| s.duration.expect("Never fails") as u64)
-            .sum()
+    fn duration(&self) -> Result<u32> {
+        let mut duration: u32 = 0;
+        for sample in &self.samples {
+            let sample_duration = track_assert_some!(sample.duration, ErrorKind::InvalidInput);
+            duration = track_assert_some!(
+                duration.checked_add(sample_duration),
+                ErrorKind::InvalidInput
+            );
+        }
+        Ok(duration)
     }
 }
 
@@ -161,8 +168,12 @@ struct AacStream {
     data: Vec<u8>,
 }
 impl AacStream {
-    fn duration(&self) -> u64 {
-        aac::SAMPLES_IN_FRAME as u64 * self.samples.len() as u64
+    fn duration(&self) -> Result<u32> {
+        let duration = track_assert_some!(
+            (aac::SAMPLES_IN_FRAME as u32).checked_mul(self.samples.len() as u32),
+            ErrorKind::InvalidInput
+        );
+        Ok(duration)
     }
 }
 

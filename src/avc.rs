@@ -1,8 +1,12 @@
+//! AVC (H.264) related constituent elements.
 use std::io::{Read, Write};
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::ReadBytesExt;
 
 use {ErrorKind, Result};
+use io::AvcBitReader;
 
+/// AVC decoder configuration record.
+#[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub struct AvcDecoderConfigurationRecord {
     pub profile_idc: u8,
@@ -12,49 +16,49 @@ pub struct AvcDecoderConfigurationRecord {
     pub picture_parameter_set: Vec<u8>,
 }
 impl AvcDecoderConfigurationRecord {
-    pub fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        track_io!(writer.write_u8(1))?; // configuration_version
+    pub(crate) fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u8!(writer, 1); // configuration_version
 
         match self.profile_idc {
             100 | 110 | 122 | 144 => track_panic!(ErrorKind::Unsupported),
             _ => {}
         }
-        track_io!(writer.write_u8(self.profile_idc))?;
-        track_io!(writer.write_u8(self.constraint_set_flag))?;
-        track_io!(writer.write_u8(self.level_idc))?;
-        track_io!(writer.write_u8(0b1111_1100 | 0b0000_0011))?; // reserved and length_size_minus_one
+        write_u8!(writer, self.profile_idc);
+        write_u8!(writer, self.constraint_set_flag);
+        write_u8!(writer, self.level_idc);
+        write_u8!(writer, 0b1111_1100 | 0b0000_0011); // reserved and length_size_minus_one
 
-        track_io!(writer.write_u8(0b1110_0000 | 0b0000_0001))?; // reserved and num_of_sequence_parameter_set_ext
-        track_io!(writer.write_u16::<BigEndian>(self.sequence_parameter_set.len() as u16))?;
-        track_io!(writer.write_all(&self.sequence_parameter_set))?;
+        write_u8!(writer, 0b1110_0000 | 0b0000_0001); // reserved and num_of_sequence_parameter_set_ext
+        write_u16!(writer, self.sequence_parameter_set.len() as u16);
+        write_all!(writer, &self.sequence_parameter_set);
 
-        track_io!(writer.write_u8(0b0000_0000 | 0b0000_0001))?; // reserved and num_of_picture_parameter_set_ext
-        track_io!(writer.write_u16::<BigEndian>(self.picture_parameter_set.len() as u16))?;
-        track_io!(writer.write_all(&self.picture_parameter_set))?;
+        write_u8!(writer, 0b0000_0000 | 0b0000_0001); // reserved and num_of_picture_parameter_set_ext
+        write_u16!(writer, self.picture_parameter_set.len() as u16);
+        write_all!(writer, &self.picture_parameter_set);
         Ok(())
     }
 }
 
-// TODO: rename (StreamInfo?)
 #[derive(Debug)]
-pub struct SequenceParameterSet {
+pub(crate) struct SpsSummary {
     pub profile_idc: u8,
     pub constraint_set_flag: u8,
     pub level_idc: u8,
-    pub pic_width_in_mbs_minus_1: u64,
-    pub pic_height_in_map_units_minus_1: u64,
-    pub frame_mbs_only_flag: u8,
-    pub frame_crop_left_offset: u64,
-    pub frame_crop_right_offset: u64,
-    pub frame_crop_top_offset: u64,
-    pub frame_crop_bottom_offset: u64,
+    pic_width_in_mbs_minus_1: u64,
+    pic_height_in_map_units_minus_1: u64,
+    frame_mbs_only_flag: u8,
+    frame_crop_left_offset: u64,
+    frame_crop_right_offset: u64,
+    frame_crop_top_offset: u64,
+    frame_crop_bottom_offset: u64,
 }
-impl SequenceParameterSet {
+impl SpsSummary {
     pub fn width(&self) -> usize {
         (self.pic_width_in_mbs_minus_1 as usize + 1) * 16
             - (self.frame_crop_right_offset as usize * 2)
             - (self.frame_crop_left_offset as usize * 2)
     }
+
     pub fn height(&self) -> usize {
         (2 - self.frame_mbs_only_flag as usize)
             * ((self.pic_height_in_map_units_minus_1 as usize + 1) * 16)
@@ -67,7 +71,7 @@ impl SequenceParameterSet {
         let constraint_set_flag = track_io!(reader.read_u8())?;
         let level_idc = track_io!(reader.read_u8())?;
 
-        let mut reader = BitReader::new(reader);
+        let mut reader = AvcBitReader::new(reader);
         let _seq_parameter_set_id = track!(reader.read_ue())?;
 
         match profile_idc {
@@ -115,7 +119,7 @@ impl SequenceParameterSet {
             frame_crop_bottom_offset = track!(reader.read_ue())?;
         }
 
-        Ok(SequenceParameterSet {
+        Ok(SpsSummary {
             profile_idc,
             constraint_set_flag,
             level_idc,
@@ -131,48 +135,7 @@ impl SequenceParameterSet {
 }
 
 #[derive(Debug)]
-pub struct BitReader<R> {
-    stream: R,
-    byte: u8,
-    bit_offset: usize,
-}
-impl<R: Read> BitReader<R> {
-    fn new(stream: R) -> Self {
-        BitReader {
-            stream,
-            byte: 0,
-            bit_offset: 8,
-        }
-    }
-    fn read_ue(&mut self) -> Result<u64> {
-        track!(self.read_exp_golomb_code())
-    }
-    fn read_exp_golomb_code(&mut self) -> Result<u64> {
-        let mut leading_zeros = 0;
-        while 0 == track!(self.read_bit())? {
-            leading_zeros += 1;
-        }
-        let mut n = 0;
-        for _ in 0..leading_zeros {
-            let bit = track!(self.read_bit())?;
-            n = (n << 1) | u64::from(bit);
-        }
-        n += 2u64.pow(leading_zeros) - 1;
-        Ok(n)
-    }
-    fn read_bit(&mut self) -> Result<u8> {
-        if self.bit_offset == 8 {
-            self.byte = track_io!(self.stream.read_u8())?;
-            self.bit_offset = 0;
-        }
-        let bit = (self.byte >> (7 - self.bit_offset)) & 0b1;
-        self.bit_offset += 1;
-        Ok(bit)
-    }
-}
-
-#[derive(Debug)]
-pub struct NalUnit {
+pub(crate) struct NalUnit {
     pub nal_ref_idc: u8,
     pub nal_unit_type: NalUnitType,
 }
@@ -190,7 +153,7 @@ impl NalUnit {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NalUnitType {
+pub(crate) enum NalUnitType {
     CodedSliceOfANonIdrPicture = 1,
     CodedSliceDataPartitionA = 2,
     CodedSliceDataPartitionB = 3,
@@ -210,7 +173,7 @@ pub enum NalUnitType {
     CodedSliceExtension = 20,
 }
 impl NalUnitType {
-    pub fn from_u8(n: u8) -> Result<Self> {
+    fn from_u8(n: u8) -> Result<Self> {
         Ok(match n {
             1 => NalUnitType::CodedSliceOfANonIdrPicture,
             2 => NalUnitType::CodedSliceDataPartitionA,
@@ -235,7 +198,7 @@ impl NalUnitType {
 }
 
 #[derive(Debug)]
-pub struct ByteStreamFormatNalUnits<'a> {
+pub(crate) struct ByteStreamFormatNalUnits<'a> {
     bytes: &'a [u8],
 }
 impl<'a> ByteStreamFormatNalUnits<'a> {

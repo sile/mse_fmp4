@@ -10,7 +10,7 @@ use mpeg2ts::ts::{Pid, ReadTsPacket, TsPacket, TsPayload};
 use {Error, ErrorKind, Result};
 use aac::{self, AdtsHeader};
 use avc::{AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalUnitType,
-          SequenceParameterSet};
+          SpsSummary};
 use fmp4::{AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSegment,
            MediaDataBox, MediaSegment, Mp4Box, Mpeg4EsDescriptorBox, Sample, SampleEntry,
            SampleFlags, TrackBox, TrackFragmentBox};
@@ -198,13 +198,12 @@ fn read_avc_aac_stream<R: ReadTsPacket>(ts_reader: R) -> Result<(AvcStream, AacS
             if avc_stream.is_none() {
                 let mut sps = None;
                 let mut pps = None;
-                let mut stream_info = None;
+                let mut sps_summary = None;
                 for nal_unit in track!(ByteStreamFormatNalUnits::new(&pes.data))? {
                     let nal_unit_type = track!(NalUnit::read_from(nal_unit))?.nal_unit_type;
                     match nal_unit_type {
                         NalUnitType::SequenceParameterSet => {
-                            stream_info =
-                                Some(track!(SequenceParameterSet::read_from(&nal_unit[1..]))?);
+                            sps_summary = Some(track!(SpsSummary::read_from(&nal_unit[1..]))?);
                             sps = Some(nal_unit.to_owned());
                         }
                         NalUnitType::PictureParameterSet => {
@@ -214,19 +213,19 @@ fn read_avc_aac_stream<R: ReadTsPacket>(ts_reader: R) -> Result<(AvcStream, AacS
                     }
                 }
 
-                let stream_info = track_assert_some!(stream_info, ErrorKind::InvalidInput);
+                let sps_summary = track_assert_some!(sps_summary, ErrorKind::InvalidInput);
                 let sps = track_assert_some!(sps, ErrorKind::InvalidInput);
                 let pps = track_assert_some!(pps, ErrorKind::InvalidInput);
                 avc_stream = Some(AvcStream {
                     configuration: AvcDecoderConfigurationRecord {
-                        profile_idc: stream_info.profile_idc,
-                        constraint_set_flag: stream_info.constraint_set_flag,
-                        level_idc: stream_info.level_idc,
+                        profile_idc: sps_summary.profile_idc,
+                        constraint_set_flag: sps_summary.constraint_set_flag,
+                        level_idc: sps_summary.level_idc,
                         sequence_parameter_set: sps,
                         picture_parameter_set: pps,
                     },
-                    width: stream_info.width(),
-                    height: stream_info.height(),
+                    width: sps_summary.width(),
+                    height: sps_summary.height(),
                     samples: Vec::new(),
                     data: Vec::new(),
                 });

@@ -1,5 +1,9 @@
-pub use self::common::{BoxHeader, BoxType, Brand, FullBoxHeader, HandlerType, SampleFormat,
-                       WriteBoxTo};
+pub use self::common::Mp4Box;
+pub use self::initialization::{AacSampleEntry, AvcConfigurationBox, AvcSampleEntry,
+                               InitializationSegment, Mpeg4EsDescriptorBox, SampleEntry, TrackBox};
+pub use self::media::{MediaDataBox, MediaSegment, MovieFragmentBox, MovieFragmentHeaderBox,
+                      Sample, SampleFlags, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
+                      TrackFragmentHeaderBox, TrackRunBox};
 
 macro_rules! write_u8 {
     ($w:expr, $n:expr) => {
@@ -64,16 +68,16 @@ macro_rules! write_zeroes {
     ($w:expr, $n:expr) => { track_io!($w.write_all(&[0;$n][..]))?; }
 }
 macro_rules! write_box {
-    ($w:expr, $b:expr) => { track!($b.write_box_to(&mut $w))?; }
+    ($w:expr, $b:expr) => { track!($b.write_box(&mut $w))?; }
 }
 macro_rules! write_boxes {
     ($w:expr, $bs:expr) => {
         for b in $bs {
-            track!(b.write_box_to(&mut $w))?;
+            track!(b.write_box(&mut $w))?;
         }
     }
 }
 
 mod common;
-pub mod initialization;
-pub mod media;
+mod initialization;
+mod media;

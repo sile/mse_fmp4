@@ -2,9 +2,10 @@ use std::ffi::CString;
 use std::io::Write;
 
 use {ErrorKind, Result};
-use aac;
+use aac::{AacProfile, ChannelConfiguration, SamplingFrequency};
+use avc::AvcDecoderConfigurationRecord;
+use fmp4::Mp4Box;
 use io::WriteTo;
-use super::{BoxType, Brand, FullBoxHeader, HandlerType, SampleFormat, WriteBoxTo};
 
 #[derive(Debug)]
 pub struct InitializationSegment {
@@ -14,7 +15,7 @@ pub struct InitializationSegment {
 impl InitializationSegment {
     pub fn new() -> Self {
         InitializationSegment {
-            ftyp_box: FileTypeBox::default(),
+            ftyp_box: FileTypeBox,
             moov_box: MovieBox::new(),
         }
     }
@@ -27,34 +28,15 @@ impl WriteTo for InitializationSegment {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FileTypeBox {
-    pub major_brand: Brand,
-    pub minor_version: u32,
-    pub compatible_brands: Vec<Brand>,
-}
-impl WriteBoxTo for FileTypeBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"ftyp")
-    }
-}
-impl WriteTo for FileTypeBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_all!(writer, &self.major_brand.0);
-        write_u32!(writer, self.minor_version);
-        for brand in &self.compatible_brands {
-            write_all!(writer, &brand.0);
-        }
+#[derive(Debug)]
+pub struct FileTypeBox;
+impl Mp4Box for FileTypeBox {
+    const BOX_TYPE: [u8; 4] = *b"ftyp";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_all!(writer, b"isom"); // major_brand
+        write_u32!(writer, 512); // minor_version
         Ok(())
-    }
-}
-impl Default for FileTypeBox {
-    fn default() -> Self {
-        FileTypeBox {
-            major_brand: Brand(*b"isom"),
-            minor_version: 512,
-            compatible_brands: Vec::new(),
-        }
     }
 }
 
@@ -62,36 +44,30 @@ impl Default for FileTypeBox {
 pub struct MovieBox {
     pub mvhd_box: MovieHeaderBox,
     pub trak_boxes: Vec<TrackBox>,
-    pub mvex_box: MovieExtendsBox,
 }
 impl MovieBox {
     pub fn new() -> Self {
         MovieBox {
             mvhd_box: MovieHeaderBox::new(),
             trak_boxes: Vec::new(),
-            mvex_box: MovieExtendsBox::new(),
         }
     }
 }
-impl WriteBoxTo for MovieBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"moov")
-    }
-}
-impl WriteTo for MovieBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+impl Mp4Box for MovieBox {
+    const BOX_TYPE: [u8; 4] = *b"moov";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         track_assert!(!self.trak_boxes.is_empty(), ErrorKind::InvalidInput);
 
         write_box!(writer, self.mvhd_box);
         write_boxes!(writer, &self.trak_boxes);
-        write_box!(writer, self.mvex_box);
         Ok(())
     }
 }
 
 #[derive(Debug)]
 pub struct MovieHeaderBox {
-    pub creation_time: u64,
+    pub creation_time: u64, // TODO: u32(?)
     pub modification_time: u64,
     pub timescale: u32,
     pub duration: u64,
@@ -114,16 +90,13 @@ impl MovieHeaderBox {
         }
     }
 }
-impl WriteBoxTo for MovieHeaderBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"mvhd")
+impl Mp4Box for MovieHeaderBox {
+    const BOX_TYPE: [u8; 4] = *b"mvhd";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(1)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(1, 0))
-    }
-}
-impl WriteTo for MovieHeaderBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u64!(writer, self.creation_time);
         write_u64!(writer, self.modification_time);
         write_u32!(writer, self.timescale);
@@ -142,98 +115,9 @@ impl WriteTo for MovieHeaderBox {
 }
 
 #[derive(Debug)]
-pub struct MovieExtendsHeaderBox {
-    pub fragment_duration: u64,
-}
-impl MovieExtendsHeaderBox {
-    pub fn new() -> Self {
-        MovieExtendsHeaderBox {
-            fragment_duration: 1, // FIXME
-        }
-    }
-}
-impl WriteBoxTo for MovieExtendsHeaderBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"mehd")
-    }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(1, 0))
-    }
-}
-impl WriteTo for MovieExtendsHeaderBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u64!(writer, self.fragment_duration);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct TrackExtendsBox {
-    pub track_id: u32,
-    pub default_sample_description_index: u32,
-    pub default_sample_duration: u32,
-    pub default_sample_size: u32,
-    pub default_sample_flags: u32,
-}
-impl TrackExtendsBox {
-    pub fn new(track_id: u32) -> Self {
-        TrackExtendsBox {
-            track_id,
-            default_sample_description_index: 1,
-            default_sample_duration: 0,
-            default_sample_size: 0,
-            default_sample_flags: 0,
-        }
-    }
-}
-impl WriteBoxTo for TrackExtendsBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"trex")
-    }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for TrackExtendsBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u32!(writer, self.track_id);
-        write_u32!(writer, self.default_sample_description_index);
-        write_u32!(writer, self.default_sample_duration);
-        write_u32!(writer, self.default_sample_size);
-        write_u32!(writer, self.default_sample_flags);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct MovieExtendsBox {
-    pub mehd_box: MovieExtendsHeaderBox,
-    pub trex_boxes: Vec<TrackExtendsBox>,
-}
-impl MovieExtendsBox {
-    pub fn new() -> Self {
-        MovieExtendsBox {
-            mehd_box: MovieExtendsHeaderBox::new(),
-            trex_boxes: Vec::new(), // FIXME
-        }
-    }
-}
-impl WriteBoxTo for MovieExtendsBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"mvex")
-    }
-}
-impl WriteTo for MovieExtendsBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_box!(writer, self.mehd_box);
-        write_boxes!(writer, &self.trex_boxes);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
 pub struct TrackBox {
     pub tkhd_box: TrackHeaderBox,
+    // TODO: pub edts_box: Option<...>,
     pub mdia_box: MediaBox,
 }
 impl TrackBox {
@@ -244,13 +128,10 @@ impl TrackBox {
         }
     }
 }
-impl WriteBoxTo for TrackBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"trak")
-    }
-}
-impl WriteTo for TrackBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+impl Mp4Box for TrackBox {
+    const BOX_TYPE: [u8; 4] = *b"trak";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.tkhd_box);
         write_box!(writer, self.mdia_box);
         Ok(())
@@ -294,20 +175,20 @@ impl TrackHeaderBox {
         }
     }
 }
-impl WriteBoxTo for TrackHeaderBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"tkhd")
+impl Mp4Box for TrackHeaderBox {
+    const BOX_TYPE: [u8; 4] = *b"tkhd";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(1)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
+    fn box_flags(&self) -> Option<u32> {
         let flags = (self.track_enabled as u32 * 0x00_0001)
             | (self.track_in_movie as u32 * 0x00_0002)
             | (self.track_in_preview as u32 * 0x00_0004)
             | (self.track_size_is_aspect_ratio as u32 * 0x00_0008);
-        Some(FullBoxHeader::new(1, flags))
+        Some(flags)
     }
-}
-impl WriteTo for TrackHeaderBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u64!(writer, self.creation_time);
         write_u64!(writer, self.modification_time);
         write_u32!(writer, self.track_id);
@@ -342,13 +223,10 @@ impl MediaBox {
         }
     }
 }
-impl WriteBoxTo for MediaBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"mdia")
-    }
-}
-impl WriteTo for MediaBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+impl Mp4Box for MediaBox {
+    const BOX_TYPE: [u8; 4] = *b"mdia";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.mdhd_box);
         write_box!(writer, self.hdlr_box);
         write_box!(writer, self.minf_box);
@@ -375,16 +253,13 @@ impl MediaHeaderBox {
         }
     }
 }
-impl WriteBoxTo for MediaHeaderBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"mdhd")
+impl Mp4Box for MediaHeaderBox {
+    const BOX_TYPE: [u8; 4] = *b"mdhd";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(1)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(1, 0))
-    }
-}
-impl WriteTo for MediaHeaderBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u64!(writer, self.creation_time);
         write_u64!(writer, self.modification_time);
         write_u32!(writer, self.timescale);
@@ -397,29 +272,31 @@ impl WriteTo for MediaHeaderBox {
 
 #[derive(Debug)]
 pub struct HandlerReferenceBox {
-    pub handler_type: HandlerType,
+    pub handler_type: [u8; 4],
     pub name: CString,
 }
 impl HandlerReferenceBox {
     pub fn new(is_video: bool) -> Self {
+        let name = if is_video {
+            "Video Handler"
+        } else {
+            "Sound Handler"
+        };
         HandlerReferenceBox {
-            handler_type: HandlerType(if is_video { *b"vide" } else { *b"soun" }),
-            name: CString::new("A handler").expect("Never fails"),
+            handler_type: if is_video { *b"vide" } else { *b"soun" },
+            name: CString::new(name).expect("Never fails"),
         }
     }
 }
-impl WriteBoxTo for HandlerReferenceBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"hdlr")
+impl Mp4Box for HandlerReferenceBox {
+    const BOX_TYPE: [u8; 4] = *b"hdlr";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for HandlerReferenceBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_zeroes!(writer, 4);
-        write_all!(writer, &self.handler_type.0);
+        write_all!(writer, &self.handler_type);
         write_zeroes!(writer, 4 * 3);
         write_all!(writer, self.name.as_bytes_with_nul());
         Ok(())
@@ -437,12 +314,12 @@ impl MediaInformationBox {
     pub fn new(is_video: bool) -> Self {
         MediaInformationBox {
             vmhd_box: if is_video {
-                Some(VideoMediaHeaderBox::new())
+                Some(VideoMediaHeaderBox)
             } else {
                 None
             },
             smhd_box: if !is_video {
-                Some(SoundMediaHeaderBox::new())
+                Some(SoundMediaHeaderBox)
             } else {
                 None
             },
@@ -451,13 +328,10 @@ impl MediaInformationBox {
         }
     }
 }
-impl WriteBoxTo for MediaInformationBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"minf")
-    }
-}
-impl WriteTo for MediaInformationBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+impl Mp4Box for MediaInformationBox {
+    const BOX_TYPE: [u8; 4] = *b"minf";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         if let Some(ref x) = self.vmhd_box {
             write_box!(writer, x);
         }
@@ -471,56 +345,30 @@ impl WriteTo for MediaInformationBox {
 }
 
 #[derive(Debug)]
-pub struct VideoMediaHeaderBox {
-    pub graphicsmode: u16,
-    pub opcolor: [u16; 3],
-}
-impl VideoMediaHeaderBox {
-    pub fn new() -> Self {
-        VideoMediaHeaderBox {
-            graphicsmode: 0,
-            opcolor: [0, 0, 0],
-        }
+pub struct VideoMediaHeaderBox;
+impl Mp4Box for VideoMediaHeaderBox {
+    const BOX_TYPE: [u8; 4] = *b"vmhd";
+
+    fn box_flags(&self) -> Option<u32> {
+        Some(1)
     }
-}
-impl WriteBoxTo for VideoMediaHeaderBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"vmhd")
-    }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 1))
-    }
-}
-impl WriteTo for VideoMediaHeaderBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u16!(writer, self.graphicsmode);
-        for &x in &self.opcolor {
-            write_u16!(writer, x);
-        }
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u16!(writer, 0); // graphicsmode
+        write_zeroes!(writer, 2 * 3); // opcolor
         Ok(())
     }
 }
 
 #[derive(Debug)]
-pub struct SoundMediaHeaderBox {
-    pub balance: i16,
-}
-impl SoundMediaHeaderBox {
-    pub fn new() -> Self {
-        SoundMediaHeaderBox { balance: 0 }
+pub struct SoundMediaHeaderBox;
+impl Mp4Box for SoundMediaHeaderBox {
+    const BOX_TYPE: [u8; 4] = *b"smhd";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
     }
-}
-impl WriteBoxTo for SoundMediaHeaderBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"smhd")
-    }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for SoundMediaHeaderBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_i16!(writer, self.balance);
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_i16!(writer, 0); // balance
         write_zeroes!(writer, 2);
         Ok(())
     }
@@ -537,14 +385,49 @@ impl DataInformationBox {
         }
     }
 }
-impl WriteBoxTo for DataInformationBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"dinf")
+impl Mp4Box for DataInformationBox {
+    const BOX_TYPE: [u8; 4] = *b"dinf";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_box!(writer, self.dref_box);
+        Ok(())
     }
 }
-impl WriteTo for DataInformationBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_box!(writer, self.dref_box);
+
+#[derive(Debug)]
+pub struct DataReferenceBox {
+    pub url_box: DataEntryUrlBox,
+}
+impl DataReferenceBox {
+    pub fn new() -> Self {
+        DataReferenceBox {
+            url_box: DataEntryUrlBox,
+        }
+    }
+}
+impl Mp4Box for DataReferenceBox {
+    const BOX_TYPE: [u8; 4] = *b"dref";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
+    }
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, 1); // entry_count
+        write_box!(writer, self.url_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct DataEntryUrlBox;
+impl Mp4Box for DataEntryUrlBox {
+    const BOX_TYPE: [u8; 4] = *b"url ";
+
+    fn box_flags(&self) -> Option<u32> {
+        Some(0x00_0001)
+    }
+    fn write_box_payload<W: Write>(&self, _writer: W) -> Result<()> {
+        // NOTE: null location
         Ok(())
     }
 }
@@ -568,45 +451,15 @@ impl SampleTableBox {
         }
     }
 }
-impl WriteBoxTo for SampleTableBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"stbl")
-    }
-}
-impl WriteTo for SampleTableBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+impl Mp4Box for SampleTableBox {
+    const BOX_TYPE: [u8; 4] = *b"stbl";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.stsd_box);
         write_box!(writer, self.stts_box);
         write_box!(writer, self.stsc_box);
         write_box!(writer, self.stsz_box);
         write_box!(writer, self.stco_box);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct DataReferenceBox {
-    pub url_box: DataEntryUrlBox,
-}
-impl DataReferenceBox {
-    pub fn new() -> Self {
-        DataReferenceBox {
-            url_box: DataEntryUrlBox::new(),
-        }
-    }
-}
-impl WriteBoxTo for DataReferenceBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"dref")
-    }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for DataReferenceBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u32!(writer, 1);
-        write_box!(writer, self.url_box);
         Ok(())
     }
 }
@@ -622,78 +475,28 @@ impl SampleDescriptionBox {
         }
     }
 }
-impl WriteBoxTo for SampleDescriptionBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"stsd")
+impl Mp4Box for SampleDescriptionBox {
+    const BOX_TYPE: [u8; 4] = *b"stsd";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for SampleDescriptionBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, self.sample_entries.len() as u32);
         write_boxes!(writer, &self.sample_entries);
-        Ok(())
-    }
-}
-impl WriteBoxTo for SampleEntry {
-    fn box_type(&self) -> BoxType {
-        BoxType(self.format.0)
-    }
-}
-impl WriteTo for SampleEntry {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_zeroes!(writer, 6);
-        write_u16!(writer, self.data_reference_index);
-        write_all!(writer, &self.data);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct DataEntryUrlBox {
-    pub location: Option<CString>,
-}
-impl DataEntryUrlBox {
-    pub fn new() -> Self {
-        DataEntryUrlBox { location: None }
-    }
-}
-impl WriteBoxTo for DataEntryUrlBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"url ")
-    }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        let flags = if self.location.is_some() {
-            0
-        } else {
-            0x00_0001
-        };
-        Some(FullBoxHeader::new(0, flags))
-    }
-}
-impl WriteTo for DataEntryUrlBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
-        if let Some(ref x) = self.location {
-            write_all!(writer, x.as_bytes_with_nul());
-        }
         Ok(())
     }
 }
 
 #[derive(Debug)]
 pub struct SampleSizeBox;
-impl WriteBoxTo for SampleSizeBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"stsz")
+impl Mp4Box for SampleSizeBox {
+    const BOX_TYPE: [u8; 4] = *b"stsz";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for SampleSizeBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0);
         write_u32!(writer, 0);
         Ok(())
@@ -702,16 +505,13 @@ impl WriteTo for SampleSizeBox {
 
 #[derive(Debug)]
 pub struct TimeToSampleBox;
-impl WriteBoxTo for TimeToSampleBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"stts")
+impl Mp4Box for TimeToSampleBox {
+    const BOX_TYPE: [u8; 4] = *b"stts";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for TimeToSampleBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0);
         Ok(())
     }
@@ -719,16 +519,13 @@ impl WriteTo for TimeToSampleBox {
 
 #[derive(Debug)]
 pub struct ChunkOffsetBox;
-impl WriteBoxTo for ChunkOffsetBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"stco")
+impl Mp4Box for ChunkOffsetBox {
+    const BOX_TYPE: [u8; 4] = *b"stco";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for ChunkOffsetBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0);
         Ok(())
     }
@@ -736,29 +533,85 @@ impl WriteTo for ChunkOffsetBox {
 
 #[derive(Debug)]
 pub struct SampleToChunkBox;
-impl WriteBoxTo for SampleToChunkBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"stsc")
+impl Mp4Box for SampleToChunkBox {
+    const BOX_TYPE: [u8; 4] = *b"stsc";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for SampleToChunkBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0);
         Ok(())
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AudioSampleEntry {
+#[derive(Debug)]
+pub enum SampleEntry {
+    Avc(AvcSampleEntry),
+    Aac(AacSampleEntry),
+}
+impl SampleEntry {
+    fn write_box<W: Write>(&self, writer: W) -> Result<()> {
+        match *self {
+            SampleEntry::Avc(ref x) => track!(x.write_box(writer)),
+            SampleEntry::Aac(ref x) => track!(x.write_box(writer)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AvcSampleEntry {
+    pub width: u16,
+    pub height: u16,
+    pub avcc_box: AvcConfigurationBox,
+}
+impl Mp4Box for AvcSampleEntry {
+    const BOX_TYPE: [u8; 4] = *b"avc1";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_zeroes!(writer, 6);
+        write_u16!(writer, 1); // data_reference_index
+
+        write_zeroes!(writer, 16);
+        write_u16!(writer, self.width);
+        write_u16!(writer, self.height);
+        write_u32!(writer, 0x0048_0000);
+        write_u32!(writer, 0x0048_0000);
+        write_zeroes!(writer, 4);
+        write_u16!(writer, 1);
+        write_zeroes!(writer, 32);
+        write_u16!(writer, 0x0018);
+        write_i16!(writer, -1);
+        write_box!(writer, self.avcc_box);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct AvcConfigurationBox {
+    pub configuration: AvcDecoderConfigurationRecord,
+}
+impl Mp4Box for AvcConfigurationBox {
+    const BOX_TYPE: [u8; 4] = *b"avcC";
+
+    fn write_box_payload<W: Write>(&self, writer: W) -> Result<()> {
+        track!(self.configuration.write_to(writer))
+    }
+}
+
+#[derive(Debug)]
+pub struct AacSampleEntry {
     pub channels: u16,
     pub sample_rate: u16,
     pub esds_box: Mpeg4EsDescriptorBox,
 }
-impl WriteTo for AudioSampleEntry {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+impl Mp4Box for AacSampleEntry {
+    const BOX_TYPE: [u8; 4] = *b"mp4a";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_zeroes!(writer, 6);
+        write_u16!(writer, 1); // data_reference_index
+
         write_zeroes!(writer, 8);
         track_assert!(
             self.channels == 1 || self.channels == 2,
@@ -775,79 +628,20 @@ impl WriteTo for AudioSampleEntry {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Mpeg4AudioSampleEntry {
-    pub audio_sample_entry: AudioSampleEntry,
-}
-impl Mpeg4AudioSampleEntry {
-    pub fn new(audio_sample_entry: AudioSampleEntry) -> Self {
-        Mpeg4AudioSampleEntry { audio_sample_entry }
-    }
-    pub fn to_sample_entry(&self) -> Result<SampleEntry> {
-        let mut data = Vec::new();
-        track!(self.audio_sample_entry.write_to(&mut data))?;
-        Ok(SampleEntry {
-            format: SampleFormat(*b"mp4a"),
-            data_reference_index: 1,
-            data,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AvcSampleEntry {
-    pub width: u16,
-    pub height: u16,
-    pub avcc_box: AvcConfigurationBox,
-}
-impl AvcSampleEntry {
-    pub fn to_sample_entry(&self) -> Result<SampleEntry> {
-        let mut data = Vec::new();
-        write_zeroes!(&mut data, 16);
-        write_u16!(&mut data, self.width);
-        write_u16!(&mut data, self.height);
-        write_u32!(&mut data, 0x0048_0000);
-        write_u32!(&mut data, 0x0048_0000);
-        write_zeroes!(&mut data, 4);
-        write_u16!(&mut data, 1);
-        write_zeroes!(&mut data, 32);
-        write_u16!(&mut data, 0x0018);
-        write_i16!(&mut data, -1);
-        write_box!(&mut data, self.avcc_box);
-        Ok(SampleEntry {
-            format: SampleFormat(*b"avc1"),
-            data_reference_index: 1,
-            data,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SampleEntry {
-    pub format: SampleFormat,
-    pub data_reference_index: u16,
-    pub data: Vec<u8>,
-}
-
 // ISO/IEC 14496-1
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Mpeg4EsDescriptorBox {
-    pub profile: aac::AacProfile,
-    pub frequency: aac::SamplingFrequency,
-    pub channel_configuration: aac::ChannelConfiguration,
-    // the maximum bitrate of this elementary stream in any time window of one second duration.
-    // TODO: max_bitrate
+    pub profile: AacProfile,
+    pub frequency: SamplingFrequency,
+    pub channel_configuration: ChannelConfiguration,
 }
-impl WriteBoxTo for Mpeg4EsDescriptorBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"esds")
+impl Mp4Box for Mpeg4EsDescriptorBox {
+    const BOX_TYPE: [u8; 4] = *b"esds";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
     }
-    fn full_box_header(&self) -> Option<FullBoxHeader> {
-        Some(FullBoxHeader::new(0, 0))
-    }
-}
-impl WriteTo for Mpeg4EsDescriptorBox {
-    fn write_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         // es descriptor
         write_u8!(writer, 0x03); // descriptor_tag=es
         write_u8!(writer, 25); // descriptor_len
@@ -861,8 +655,8 @@ impl WriteTo for Mpeg4EsDescriptorBox {
         write_u8!(writer, 0x40); // object_type
         write_u8!(writer, (5 << 2) | 1); // stream_type=audio=5, upstream=0, reserved=1
         write_u24!(writer, 0); // buffer_size
-        write_u32!(writer, 0); // max_bitrate (TODO)
-        write_u32!(writer, 0); // avg_bitrate (TODO)
+        write_u32!(writer, 0); // max_bitrate
+        write_u32!(writer, 0); // avg_bitrate
 
         // decoder specific info
         write_u8!(writer, 0x05); // descriptor_tag=decoder_specific_info
@@ -879,20 +673,5 @@ impl WriteTo for Mpeg4EsDescriptorBox {
         write_u8!(writer, 2); // MP4
 
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AvcConfigurationBox {
-    pub config: ::avc::AvcDecoderConfigurationRecord,
-}
-impl WriteBoxTo for AvcConfigurationBox {
-    fn box_type(&self) -> BoxType {
-        BoxType(*b"avcC")
-    }
-}
-impl WriteTo for AvcConfigurationBox {
-    fn write_to<W: Write>(&self, writer: W) -> Result<()> {
-        track!(self.config.write_to(writer))
     }
 }

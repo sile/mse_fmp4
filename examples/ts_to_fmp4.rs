@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use byteorder::{BigEndian, WriteBytesExt};
 use clap::{App, Arg};
 use mpeg2ts::time::Timestamp;
-use mse_fmp4::fmp4::{self, WriteBoxTo};
+use mse_fmp4::fmp4::{self, Mp4Box};
 use mse_fmp4::{aac, avc};
 use mse_fmp4::io::{ByteCounter, WriteTo};
 use mse_fmp4::ErrorKind;
@@ -201,7 +201,7 @@ fn main() {
         width: avc_stream.width.unwrap() as u16,
         height: avc_stream.height.unwrap() as u16,
         avcc_box: fmp4::AvcConfigurationBox {
-            config: avc_stream.decoder_configuration_record.clone().unwrap(),
+            configuration: avc_stream.decoder_configuration_record.clone().unwrap(),
         },
     };
     t.mdia_box
@@ -209,7 +209,7 @@ fn main() {
         .stbl_box
         .stsd_box
         .sample_entries
-        .push(track_try_unwrap!(avc_sample_entry.to_sample_entry()));
+        .push(fmp4::SampleEntry::Avc(avc_sample_entry));
     init_seg.moov_box.trak_boxes.push(t);
 
     // audio track
@@ -220,7 +220,7 @@ fn main() {
     t.mdia_box.mdhd_box.duration = u64::from(audio_duration);
 
     let adts_header = aac_stream.adts_header();
-    let aac_sample_entry = fmp4::Mpeg4AudioSampleEntry::new(fmp4::AudioSampleEntry {
+    let aac_sample_entry = fmp4::AacSampleEntry {
         channels: aac_stream.channels(),
         sample_rate: aac_stream.timescale() as u16,
         esds_box: fmp4::Mpeg4EsDescriptorBox {
@@ -228,27 +228,15 @@ fn main() {
             frequency: adts_header.sampling_frequency,
             channel_configuration: adts_header.channel_configuration,
         },
-    });
+    };
     t.mdia_box
         .minf_box
         .stbl_box
         .stsd_box
         .sample_entries
-        .push(track_try_unwrap!(aac_sample_entry.to_sample_entry()));
+        .push(fmp4::SampleEntry::Aac(aac_sample_entry));
     init_seg.moov_box.trak_boxes.push(t);
 
-    //
-    init_seg.moov_box.mvex_box.mehd_box.fragment_duration = video_duration;
-    init_seg
-        .moov_box
-        .mvex_box
-        .trex_boxes
-        .push(fmp4::TrackExtendsBox::new(1));
-    init_seg
-        .moov_box
-        .mvex_box
-        .trex_boxes
-        .push(fmp4::TrackExtendsBox::new(2));
     {
         let out = track_try_unwrap!(
             File::create(format!("{}-init.mp4", output_file_prefix))
@@ -265,31 +253,27 @@ fn main() {
     let mut traf = fmp4::TrackFragmentBox::new(1);
     // traf.tfhd_box.default_sample_duration =
     //     Some(video_duration as u32 / avc_stream.packets.len() as u32); // TODO
-    traf.tfhd_box.default_sample_flags = Some(
-        fmp4::SampleFlags {
-            // TODO:
-            is_leading: 0,
-            sample_depends_on: 1,
-            sample_is_depdended_on: 0,
-            sample_has_redundancy: 0,
-            sample_padding_value: 0,
-            sample_is_non_sync_sample: true,
-            sample_degradation_priority: 0,
-        }.to_u32(),
-    );
+    traf.tfhd_box.default_sample_flags = Some(fmp4::SampleFlags {
+        // TODO:
+        is_leading: 0,
+        sample_depends_on: 1,
+        sample_is_depdended_on: 0,
+        sample_has_redundancy: 0,
+        sample_padding_value: 0,
+        sample_is_non_sync_sample: true,
+        sample_degradation_priority: 0,
+    });
     traf.trun_box.data_offset = Some(0); // dummy
-    traf.trun_box.first_sample_flags = Some(
-        fmp4::SampleFlags {
-            // TODO:
-            is_leading: 0,
-            sample_depends_on: 2,
-            sample_is_depdended_on: 0,
-            sample_has_redundancy: 0,
-            sample_padding_value: 0,
-            sample_is_non_sync_sample: false,
-            sample_degradation_priority: 0,
-        }.to_u32(),
-    );
+    traf.trun_box.first_sample_flags = Some(fmp4::SampleFlags {
+        // TODO:
+        is_leading: 0,
+        sample_depends_on: 2,
+        sample_is_depdended_on: 0,
+        sample_has_redundancy: 0,
+        sample_padding_value: 0,
+        sample_is_non_sync_sample: false,
+        sample_degradation_priority: 0,
+    });
     let mut prev_pts: Option<Timestamp> = None;
     for pes in &avc_stream.packets {
         let nal_units = track_try_unwrap!(avc::ByteStreamFormatNalUnits::new(&pes.data));
@@ -314,13 +298,13 @@ fn main() {
                 } else {
                     sample_composition_time_offset as u32
                 };
-        let entry = fmp4::TrunEntry {
-            sample_duration: Some(duration),
-            sample_size: Some(sample_size),
-            sample_flags: None,
-            sample_composition_time_offset: Some(sample_composition_time_offset),
+        let entry = fmp4::Sample {
+            duration: Some(duration),
+            size: Some(sample_size),
+            flags: None,
+            composition_time_offset: Some(sample_composition_time_offset),
         };
-        traf.trun_box.entries.push(entry);
+        traf.trun_box.samples.push(entry);
         prev_pts = Some(pts);
     }
     media_seg.moof_box.traf_boxes.push(traf);
@@ -334,13 +318,13 @@ fn main() {
         while !reader.is_empty() {
             let adts_header = track_try_unwrap!(aac::AdtsHeader::read_from(&mut reader));
             let sample_size = adts_header.frame_len_exclude_header();
-            let entry = fmp4::TrunEntry {
-                sample_duration: None,
-                sample_size: Some(u32::from(sample_size)),
-                sample_flags: None,
-                sample_composition_time_offset: None,
+            let entry = fmp4::Sample {
+                duration: None,
+                size: Some(u32::from(sample_size)),
+                flags: None,
+                composition_time_offset: None,
             };
-            traf.trun_box.entries.push(entry);
+            traf.trun_box.samples.push(entry);
 
             audio_mdat
                 .data
@@ -352,12 +336,12 @@ fn main() {
 
     //
     let mut counter = ByteCounter::with_sink();
-    media_seg.moof_box.write_box_to(&mut counter).unwrap();
+    media_seg.moof_box.write_box(&mut counter).unwrap();
     media_seg.moof_box.traf_boxes[0].trun_box.data_offset = Some(counter.count() as i32 + 8);
 
     media_seg.mdat_boxes.push(video_mdat);
 
-    media_seg.mdat_boxes[0].write_box_to(&mut counter).unwrap();
+    media_seg.mdat_boxes[0].write_box(&mut counter).unwrap();
     media_seg.moof_box.traf_boxes[1].trun_box.data_offset = Some(counter.count() as i32 + 8);
 
     media_seg.mdat_boxes.push(audio_mdat);

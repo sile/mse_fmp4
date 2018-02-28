@@ -44,6 +44,7 @@ impl Mp4Box for FileTypeBox {
 pub struct MovieBox {
     pub mvhd_box: MovieHeaderBox,
     pub trak_boxes: Vec<TrackBox>,
+    pub mvex_box: MovieExtendsBox,
 }
 impl Mp4Box for MovieBox {
     const BOX_TYPE: [u8; 4] = *b"moov";
@@ -52,6 +53,85 @@ impl Mp4Box for MovieBox {
         track_assert!(!self.trak_boxes.is_empty(), ErrorKind::InvalidInput);
         write_box!(writer, self.mvhd_box);
         write_boxes!(writer, &self.trak_boxes);
+        write_box!(writer, self.mvex_box);
+        Ok(())
+    }
+}
+
+/// 8.8.1 Movie Extends Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
+pub struct MovieExtendsBox {
+    pub mehd_box: MovieExtendsHeaderBox,
+    pub trex_boxes: Vec<TrackExtendsBox>,
+}
+impl Mp4Box for MovieExtendsBox {
+    const BOX_TYPE: [u8; 4] = *b"mvex";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        track_assert!(!self.trex_boxes.is_empty(), ErrorKind::InvalidInput);
+        write_box!(writer, self.mehd_box);
+        write_boxes!(writer, &self.trex_boxes);
+        Ok(())
+    }
+}
+
+/// 8.8.2 Movie Extends Header Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
+pub struct MovieExtendsHeaderBox {
+    pub fragment_duration: u32,
+}
+impl Mp4Box for MovieExtendsHeaderBox {
+    const BOX_TYPE: [u8; 4] = *b"mehd";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
+    }
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, self.fragment_duration);
+        Ok(())
+    }
+}
+
+/// 8.8.3 Track Extends Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug)]
+pub struct TrackExtendsBox {
+    track_id: u32,
+    default_sample_description_index: u32,
+    pub default_sample_duration: u32,
+    pub default_sample_size: u32,
+    pub default_sample_flags: u32,
+}
+impl TrackExtendsBox {
+    /// Makes a new `TrackExtendsBox` instance.
+    pub fn new(is_video: bool) -> Self {
+        TrackExtendsBox {
+            track_id: if is_video {
+                VIDEO_TRACK_ID
+            } else {
+                AUDIO_TRACK_ID
+            },
+            default_sample_description_index: 1,
+            default_sample_duration: 0,
+            default_sample_size: 0,
+            default_sample_flags: 0,
+        }
+    }
+}
+impl Mp4Box for TrackExtendsBox {
+    const BOX_TYPE: [u8; 4] = *b"trex";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
+    }
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, self.track_id);
+        write_u32!(writer, self.default_sample_description_index);
+        write_u32!(writer, self.default_sample_duration);
+        write_u32!(writer, self.default_sample_size);
+        write_u32!(writer, self.default_sample_flags);
         Ok(())
     }
 }

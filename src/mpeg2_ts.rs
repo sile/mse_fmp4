@@ -1,4 +1,5 @@
 //! MPEG-2 TS related constituent elements.
+use std::cmp;
 use std::collections::HashMap;
 use std::io::Write;
 use byteorder::{BigEndian, WriteBytesExt};
@@ -14,7 +15,7 @@ use avc::{AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalU
           SpsSummary};
 use fmp4::{AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSegment,
            MediaDataBox, MediaSegment, Mp4Box, Mpeg4EsDescriptorBox, Sample, SampleEntry,
-           SampleFlags, TrackBox, TrackFragmentBox};
+           SampleFlags, TrackBox, TrackExtendsBox, TrackFragmentBox};
 use io::ByteCounter;
 
 /// Reads TS packets from `reader`, and converts them into fragmented MP4 segments.
@@ -37,9 +38,11 @@ fn make_initialization_segment(
     if video_duration < audio_duration {
         segment.moov_box.mvhd_box.timescale = aac::SAMPLES_IN_FRAME as u32;
         segment.moov_box.mvhd_box.duration = audio_duration;
+        segment.moov_box.mvex_box.mehd_box.fragment_duration = audio_duration;
     } else {
         segment.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
         segment.moov_box.mvhd_box.duration = video_duration;
+        segment.moov_box.mvex_box.mehd_box.fragment_duration = video_duration;
     }
 
     // video track
@@ -66,6 +69,11 @@ fn make_initialization_segment(
         .sample_entries
         .push(SampleEntry::Avc(avc_sample_entry));
     segment.moov_box.trak_boxes.push(track);
+    segment
+        .moov_box
+        .mvex_box
+        .trex_boxes
+        .push(TrackExtendsBox::new(true));
 
     // audio track
     let mut track = TrackBox::new(false);
@@ -88,6 +96,11 @@ fn make_initialization_segment(
         .sample_entries
         .push(SampleEntry::Aac(aac_sample_entry));
     segment.moov_box.trak_boxes.push(track);
+    segment
+        .moov_box
+        .mvex_box
+        .trex_boxes
+        .push(TrackExtendsBox::new(false));
 
     Ok(segment)
 }
@@ -309,12 +322,12 @@ fn read_avc_aac_stream<R: ReadTsPacket>(ts_reader: R) -> Result<(AvcStream, AacS
     let aac_stream = track_assert_some!(aac_stream, ErrorKind::InvalidInput);
 
     avc_timestamps.sort();
-    for (&(curr, i), &(next, _)) in avc_timestamps.iter().zip(avc_timestamps.iter().skip(1)) {
+    for (&(curr, _), &(next, i)) in avc_timestamps.iter().zip(avc_timestamps.iter().skip(1)) {
         let duration = next - curr;
         avc_stream.samples[i].duration = Some(duration as u32);
-        if i == avc_timestamps.len() - 2 {
-            avc_stream.samples[i + 1].duration = Some(duration as u32);
-        }
+    }
+    if !avc_stream.samples.is_empty() {
+        avc_stream.samples[0].duration = Some(cmp::max(0, avc_stream.start_time()) as u32);
     }
 
     Ok((avc_stream, aac_stream))

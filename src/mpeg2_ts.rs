@@ -1,6 +1,5 @@
 //! MPEG-2 TS related constituent elements.
 use std::collections::HashMap;
-use std::cmp;
 use std::io::Write;
 use byteorder::{BigEndian, WriteBytesExt};
 use mpeg2ts;
@@ -35,16 +34,22 @@ fn make_initialization_segment(
     let audio_duration = track!(aac_stream.duration())?;
 
     let mut segment = InitializationSegment::default();
-    segment.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
-    segment.moov_box.mvhd_box.duration = cmp::max(video_duration, audio_duration);
+    if video_duration < audio_duration {
+        segment.moov_box.mvhd_box.timescale = aac::SAMPLES_IN_FRAME as u32;
+        segment.moov_box.mvhd_box.duration = audio_duration;
+    } else {
+        segment.moov_box.mvhd_box.timescale = Timestamp::RESOLUTION as u32;
+        segment.moov_box.mvhd_box.duration = video_duration;
+    }
 
     // video track
     let mut track = TrackBox::new(true);
     track.tkhd_box.width = (avc_stream.width as u32) << 16;
     track.tkhd_box.height = (avc_stream.height as u32) << 16;
     track.tkhd_box.duration = video_duration;
+    track.edts_box.elst_box.media_time = avc_stream.start_time();
     track.mdia_box.mdhd_box.timescale = Timestamp::RESOLUTION as u32;
-    track.mdia_box.mdhd_box.duration = track.tkhd_box.duration;
+    track.mdia_box.mdhd_box.duration = video_duration;
 
     let avc_sample_entry = AvcSampleEntry {
         width: avc_stream.width as u16,
@@ -66,7 +71,7 @@ fn make_initialization_segment(
     let mut track = TrackBox::new(false);
     track.tkhd_box.duration = audio_duration;
     track.mdia_box.mdhd_box.timescale = aac_stream.adts_header.sampling_frequency.as_u32();
-    track.mdia_box.mdhd_box.duration = track.tkhd_box.duration;
+    track.mdia_box.mdhd_box.duration = audio_duration;
 
     let aac_sample_entry = AacSampleEntry {
         esds_box: Mpeg4EsDescriptorBox {
@@ -158,6 +163,12 @@ impl AvcStream {
             );
         }
         Ok(duration)
+    }
+    fn start_time(&self) -> i32 {
+        self.samples
+            .first()
+            .and_then(|s| s.composition_time_offset)
+            .unwrap_or(0)
     }
 }
 

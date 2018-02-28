@@ -100,7 +100,7 @@ impl Mp4Box for MovieHeaderBox {
 #[derive(Debug)]
 pub struct TrackBox {
     pub tkhd_box: TrackHeaderBox,
-    // TODO: pub edts_box: Option<...>,
+    pub edts_box: EditBox,
     pub mdia_box: MediaBox,
 }
 impl TrackBox {
@@ -108,6 +108,7 @@ impl TrackBox {
     pub fn new(is_video: bool) -> Self {
         TrackBox {
             tkhd_box: TrackHeaderBox::new(is_video),
+            edts_box: EditBox::default(),
             mdia_box: MediaBox::new(is_video),
         }
     }
@@ -117,6 +118,7 @@ impl Mp4Box for TrackBox {
 
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.tkhd_box);
+        write_box!(writer, self.edts_box);
         write_box!(writer, self.mdia_box);
         Ok(())
     }
@@ -174,6 +176,43 @@ impl Mp4Box for TrackHeaderBox {
         }
         write_u32!(writer, self.width);
         write_u32!(writer, self.height);
+        Ok(())
+    }
+}
+
+/// 8.6.5 Edit Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
+pub struct EditBox {
+    pub elst_box: EditListBox,
+}
+impl Mp4Box for EditBox {
+    const BOX_TYPE: [u8; 4] = *b"edts";
+
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_box!(writer, self.elst_box);
+        Ok(())
+    }
+}
+
+/// 8.6.6 Edit List Box (ISO/IEC 14496-12).
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
+pub struct EditListBox {
+    pub media_time: i32,
+}
+impl Mp4Box for EditListBox {
+    const BOX_TYPE: [u8; 4] = *b"elst";
+
+    fn box_version(&self) -> Option<u8> {
+        Some(0)
+    }
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        write_u32!(writer, 1); // entry_count
+        write_u32!(writer, 0); // segment_duration ("0" indicating that it spans all subsequent media)
+        write_i32!(writer, self.media_time);
+        write_i16!(writer, 1); // media_rate_integer
+        write_i16!(writer, 0); // media_rate_fraction
         Ok(())
     }
 }

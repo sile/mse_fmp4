@@ -217,10 +217,9 @@ fn read_avc_aac_stream<R: ReadTsPacket>(ts_reader: R) -> Result<(AvcStream, AacS
         );
         if pes.header.stream_id.is_video() {
             track_assert_eq!(stream_type, StreamType::H264, ErrorKind::Unsupported);
-            track_assert!(pes.header.data_alignment_indicator, ErrorKind::Unsupported);
 
             let pts = track_assert_some!(pes.header.pts, ErrorKind::InvalidInput);
-            let dts = track_assert_some!(pes.header.dts, ErrorKind::InvalidInput);
+            let dts = pes.header.dts.unwrap_or(pts);
 
             let i = avc_timestamps.len();
             let mut timestamp = pts.as_u64();

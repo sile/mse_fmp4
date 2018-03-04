@@ -96,6 +96,7 @@ impl SpsSummary {
                     let _offset_for_ref_frame = track!(reader.read_ue())?;
                 }
             }
+            2 => {}
             _ => track_panic!(ErrorKind::InvalidInput),
         }
         let _num_ref_frames = track!(reader.read_ue())?;

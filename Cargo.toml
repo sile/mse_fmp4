@@ -1,6 +1,6 @@
 [package]
 name = "mse_fmp4"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Takeru Ohta <phjgt308@gmail.com>"]
 description = "A library for generating fragmented MP4 that playable via Media Source Extensions"
 homepage = "https://github.com/sile/mse_fmp4"

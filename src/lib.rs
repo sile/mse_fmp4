@@ -85,6 +85,29 @@ macro_rules! write_boxes {
         }
     };
 }
+macro_rules! box_size {
+    ($b:expr) => {
+        track!($b.box_size())?
+    };
+}
+macro_rules! optional_box_size {
+    ($b:expr) => {
+        if let Some(ref b) = $b.as_ref() {
+            track!(b.box_size())?
+        } else {
+            0
+        }
+    };
+}
+macro_rules! boxes_size {
+    ($b:expr) => {{
+        let mut size = 0;
+        for b in $b.iter() {
+            size += box_size!(b);
+        }
+        size
+    }};
+}
 
 pub use error::{Error, ErrorKind};
 

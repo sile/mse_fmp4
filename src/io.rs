@@ -28,6 +28,15 @@ impl ByteCounter<Sink> {
     pub fn with_sink() -> Self {
         Self::new(sink())
     }
+
+    pub fn calculate<F>(f: F) -> Result<u64>
+    where
+        F: FnOnce(&mut Self) -> Result<()>,
+    {
+        let mut writer = ByteCounter::with_sink();
+        track!(f(&mut writer))?;
+        Ok(writer.count() as u64)
+    }
 }
 impl<T: Write> Write for ByteCounter<T> {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {

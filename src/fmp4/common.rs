@@ -1,6 +1,5 @@
 use std::io::Write;
 
-use io::ByteCounter;
 use Result;
 
 /// MP4 (ISO BMFF) box.
@@ -14,13 +13,12 @@ pub trait Mp4Box {
         if self.box_version().is_some() | self.box_flags().is_some() {
             size += 4;
         }
-
-        let mut writer = ByteCounter::with_sink();
-        track!(self.write_box_payload(&mut writer))?;
-        size += writer.count() as u32;
-
+        size += track!(self.box_payload_size())?;
         Ok(size)
     }
+
+    /// Payload size of the box.
+    fn box_payload_size(&self) -> Result<u32>;
 
     /// Box version.
     ///

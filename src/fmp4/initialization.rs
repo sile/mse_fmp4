@@ -4,7 +4,7 @@ use std::io::Write;
 use aac::{AacProfile, ChannelConfiguration, SamplingFrequency};
 use avc::AvcDecoderConfigurationRecord;
 use fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
-use io::WriteTo;
+use io::{ByteCounter, WriteTo};
 use {ErrorKind, Result};
 
 /// [3. Initialization Segments][init_segment] (ISO BMFF Byte Stream Format)
@@ -38,6 +38,9 @@ pub struct FileTypeBox;
 impl Mp4Box for FileTypeBox {
     const BOX_TYPE: [u8; 4] = *b"ftyp";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(8)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_all!(writer, b"isom"); // major_brand
         write_u32!(writer, 512); // minor_version
@@ -56,6 +59,13 @@ pub struct MovieBox {
 impl Mp4Box for MovieBox {
     const BOX_TYPE: [u8; 4] = *b"moov";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += box_size!(self.mvhd_box);
+        size += boxes_size!(self.trak_boxes);
+        size += box_size!(self.mvex_box);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         track_assert!(!self.trak_boxes.is_empty(), ErrorKind::InvalidInput);
         write_box!(writer, self.mvhd_box);
@@ -75,6 +85,12 @@ pub struct MovieExtendsBox {
 impl Mp4Box for MovieExtendsBox {
     const BOX_TYPE: [u8; 4] = *b"mvex";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += box_size!(self.mehd_box);
+        size += boxes_size!(self.trex_boxes);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         track_assert!(!self.trex_boxes.is_empty(), ErrorKind::InvalidInput);
         write_box!(writer, self.mehd_box);
@@ -94,6 +110,9 @@ impl Mp4Box for MovieExtendsHeaderBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, self.fragment_duration);
@@ -133,6 +152,9 @@ impl Mp4Box for TrackExtendsBox {
     fn box_version(&self) -> Option<u8> {
         Some(0)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4 * 5)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, self.track_id);
         write_u32!(writer, self.default_sample_description_index);
@@ -163,6 +185,10 @@ impl Mp4Box for MovieHeaderBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        let size = track!(ByteCounter::calculate(|w| self.write_box_payload(w)))?;
+        Ok(size as u32)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0); // creation_time
@@ -203,6 +229,13 @@ impl TrackBox {
 impl Mp4Box for TrackBox {
     const BOX_TYPE: [u8; 4] = *b"trak";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += box_size!(self.tkhd_box);
+        size += box_size!(self.edts_box);
+        size += box_size!(self.mdia_box);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.tkhd_box);
         write_box!(writer, self.edts_box);
@@ -247,6 +280,10 @@ impl Mp4Box for TrackHeaderBox {
         let flags = 0x00_0001 | 0x00_0002 | 0x00_0004;
         Some(flags)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        let size = track!(ByteCounter::calculate(|w| self.write_box_payload(w)))?;
+        Ok(size as u32)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0); // creation_time
         write_u32!(writer, 0); // modification_time
@@ -276,6 +313,9 @@ pub struct EditBox {
 impl Mp4Box for EditBox {
     const BOX_TYPE: [u8; 4] = *b"edts";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(box_size!(self.elst_box))
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.elst_box);
         Ok(())
@@ -293,6 +333,9 @@ impl Mp4Box for EditListBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4 + 4 + 4 + 2 + 2)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 1); // entry_count
@@ -324,6 +367,13 @@ impl MediaBox {
 impl Mp4Box for MediaBox {
     const BOX_TYPE: [u8; 4] = *b"mdia";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += box_size!(self.mdhd_box);
+        size += box_size!(self.hdlr_box);
+        size += box_size!(self.minf_box);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.mdhd_box);
         write_box!(writer, self.hdlr_box);
@@ -352,6 +402,9 @@ impl Mp4Box for MediaHeaderBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4 + 4 + 4 + 4 + 2 + 2)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0); // creation_time
@@ -388,6 +441,10 @@ impl Mp4Box for HandlerReferenceBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        let size = track!(ByteCounter::calculate(|w| self.write_box_payload(w)))?;
+        Ok(size as u32)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_zeroes!(writer, 4);
@@ -428,6 +485,14 @@ impl MediaInformationBox {
 impl Mp4Box for MediaInformationBox {
     const BOX_TYPE: [u8; 4] = *b"minf";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += optional_box_size!(self.vmhd_box);
+        size += optional_box_size!(self.smhd_box);
+        size += box_size!(self.dinf_box);
+        size += box_size!(self.stbl_box);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         if let Some(ref x) = self.vmhd_box {
             write_box!(writer, x);
@@ -450,6 +515,9 @@ impl Mp4Box for VideoMediaHeaderBox {
     fn box_flags(&self) -> Option<u32> {
         Some(1)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(2 + 2 * 3)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u16!(writer, 0); // graphicsmode
         write_zeroes!(writer, 2 * 3); // opcolor
@@ -465,6 +533,9 @@ impl Mp4Box for SoundMediaHeaderBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(2 + 2)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_i16!(writer, 0); // balance
@@ -482,6 +553,9 @@ pub struct DataInformationBox {
 impl Mp4Box for DataInformationBox {
     const BOX_TYPE: [u8; 4] = *b"dinf";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(box_size!(self.dref_box))
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.dref_box);
         Ok(())
@@ -500,6 +574,11 @@ impl Mp4Box for DataReferenceBox {
     fn box_version(&self) -> Option<u8> {
         Some(0)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 4;
+        size += box_size!(self.url_box);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 1); // entry_count
         write_box!(writer, self.url_box);
@@ -515,6 +594,9 @@ impl Mp4Box for DataEntryUrlBox {
 
     fn box_flags(&self) -> Option<u32> {
         Some(0x00_0001)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(0)
     }
     fn write_box_payload<W: Write>(&self, _writer: W) -> Result<()> {
         // NOTE: null location
@@ -535,6 +617,15 @@ pub struct SampleTableBox {
 impl Mp4Box for SampleTableBox {
     const BOX_TYPE: [u8; 4] = *b"stbl";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += box_size!(self.stsd_box);
+        size += box_size!(self.stts_box);
+        size += box_size!(self.stsc_box);
+        size += box_size!(self.stsz_box);
+        size += box_size!(self.stco_box);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.stsd_box);
         write_box!(writer, self.stts_box);
@@ -557,6 +648,11 @@ impl Mp4Box for SampleDescriptionBox {
     fn box_version(&self) -> Option<u8> {
         Some(0)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 4;
+        size += boxes_size!(self.sample_entries);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         track_assert!(!self.sample_entries.is_empty(), ErrorKind::InvalidInput);
         write_u32!(writer, self.sample_entries.len() as u32);
@@ -574,6 +670,9 @@ impl Mp4Box for SampleSizeBox {
     fn box_version(&self) -> Option<u8> {
         Some(0)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4 + 4)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0);
         write_u32!(writer, 0);
@@ -590,6 +689,9 @@ impl Mp4Box for TimeToSampleBox {
     fn box_version(&self) -> Option<u8> {
         Some(0)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0);
         Ok(())
@@ -604,6 +706,9 @@ impl Mp4Box for ChunkOffsetBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0);
@@ -620,6 +725,9 @@ impl Mp4Box for SampleToChunkBox {
     fn box_version(&self) -> Option<u8> {
         Some(0)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0);
         Ok(())
@@ -634,6 +742,12 @@ pub enum SampleEntry {
     Aac(AacSampleEntry),
 }
 impl SampleEntry {
+    fn box_size(&self) -> Result<u32> {
+        match *self {
+            SampleEntry::Avc(ref x) => track!(x.box_size()),
+            SampleEntry::Aac(ref x) => track!(x.box_size()),
+        }
+    }
     fn write_box<W: Write>(&self, writer: W) -> Result<()> {
         match *self {
             SampleEntry::Avc(ref x) => track!(x.write_box(writer)),
@@ -650,10 +764,8 @@ pub struct AvcSampleEntry {
     pub height: u16,
     pub avcc_box: AvcConfigurationBox,
 }
-impl Mp4Box for AvcSampleEntry {
-    const BOX_TYPE: [u8; 4] = *b"avc1";
-
-    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+impl AvcSampleEntry {
+    fn write_box_payload_without_avcc<W: Write>(&self, mut writer: W) -> Result<()> {
         write_zeroes!(writer, 6);
         write_u16!(writer, 1); // data_reference_index
 
@@ -667,6 +779,22 @@ impl Mp4Box for AvcSampleEntry {
         write_zeroes!(writer, 32);
         write_u16!(writer, 0x0018);
         write_i16!(writer, -1);
+        Ok(())
+    }
+}
+impl Mp4Box for AvcSampleEntry {
+    const BOX_TYPE: [u8; 4] = *b"avc1";
+
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += track!(ByteCounter::calculate(
+            |w| self.write_box_payload_without_avcc(w)
+        ))? as u32;
+        size += box_size!(self.avcc_box);
+        Ok(size)
+    }
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        track!(self.write_box_payload_without_avcc(&mut writer))?;
         write_box!(writer, self.avcc_box);
         Ok(())
     }
@@ -681,6 +809,10 @@ pub struct AvcConfigurationBox {
 impl Mp4Box for AvcConfigurationBox {
     const BOX_TYPE: [u8; 4] = *b"avcC";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let size = track!(ByteCounter::calculate(|w| self.configuration.write_to(w)))?;
+        Ok(size as u32)
+    }
     fn write_box_payload<W: Write>(&self, writer: W) -> Result<()> {
         track!(self.configuration.write_to(writer))
     }
@@ -692,10 +824,8 @@ impl Mp4Box for AvcConfigurationBox {
 pub struct AacSampleEntry {
     pub esds_box: Mpeg4EsDescriptorBox,
 }
-impl Mp4Box for AacSampleEntry {
-    const BOX_TYPE: [u8; 4] = *b"mp4a";
-
-    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+impl AacSampleEntry {
+    fn write_box_payload_without_esds<W: Write>(&self, mut writer: W) -> Result<()> {
         write_zeroes!(writer, 6);
         write_u16!(writer, 1); // data_reference_index
 
@@ -710,7 +840,22 @@ impl Mp4Box for AacSampleEntry {
         write_zeroes!(writer, 4);
         write_u16!(writer, sample_rate as u16);
         write_zeroes!(writer, 2);
+        Ok(())
+    }
+}
+impl Mp4Box for AacSampleEntry {
+    const BOX_TYPE: [u8; 4] = *b"mp4a";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += track!(ByteCounter::calculate(
+            |w| self.write_box_payload_without_esds(w)
+        ))? as u32;
+        size += box_size!(self.esds_box);
+        Ok(size)
+    }
+    fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
+        track!(self.write_box_payload_without_esds(&mut writer))?;
         write_box!(writer, self.esds_box);
         Ok(())
     }
@@ -729,6 +874,10 @@ impl Mp4Box for Mpeg4EsDescriptorBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        let size = track!(ByteCounter::calculate(|w| self.write_box_payload(w)))?;
+        Ok(size as u32)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         // es descriptor

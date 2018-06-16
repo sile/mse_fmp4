@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
-use io::WriteTo;
+use io::{ByteCounter, WriteTo};
 use {ErrorKind, Result};
 
 /// [ISO BMFF Byte Stream Format: 4. Media Segments][media_segment]
@@ -31,6 +31,9 @@ pub struct MediaDataBox {
 impl Mp4Box for MediaDataBox {
     const BOX_TYPE: [u8; 4] = *b"mdat";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(self.data.len() as u32)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_all!(writer, &self.data);
         Ok(())
@@ -47,6 +50,12 @@ pub struct MovieFragmentBox {
 impl Mp4Box for MovieFragmentBox {
     const BOX_TYPE: [u8; 4] = *b"moof";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += box_size!(self.mfhd_box);
+        size += boxes_size!(self.traf_boxes);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         track_assert!(!self.traf_boxes.is_empty(), ErrorKind::InvalidInput);
         write_box!(writer, self.mfhd_box);
@@ -66,6 +75,9 @@ impl Mp4Box for MovieFragmentHeaderBox {
 
     fn box_version(&self) -> Option<u8> {
         Some(0)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, self.sequence_number);
@@ -107,6 +119,13 @@ impl TrackFragmentBox {
 impl Mp4Box for TrackFragmentBox {
     const BOX_TYPE: [u8; 4] = *b"traf";
 
+    fn box_payload_size(&self) -> Result<u32> {
+        let mut size = 0;
+        size += box_size!(self.tfhd_box);
+        size += box_size!(self.tfdt_box);
+        size += box_size!(self.trun_box);
+        Ok(size)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_box!(writer, self.tfhd_box);
         write_box!(writer, self.tfdt_box);
@@ -155,6 +174,10 @@ impl Mp4Box for TrackFragmentHeaderBox {
             | (self.default_base_is_moof as u32 * 0x02_0000);
         Some(flags)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        let size = track!(ByteCounter::calculate(|w| self.write_box_payload(w)))?;
+        Ok(size as u32)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, self.track_id);
         if let Some(x) = self.base_data_offset {
@@ -185,6 +208,9 @@ impl Mp4Box for TrackFragmentBaseMediaDecodeTimeBox {
     fn box_version(&self) -> Option<u8> {
         Some(0)
     }
+    fn box_payload_size(&self) -> Result<u32> {
+        Ok(4)
+    }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, 0); // base_media_decode_time
         Ok(())
@@ -214,6 +240,10 @@ impl Mp4Box for TrackRunBox {
             | (self.first_sample_flags.is_some() as u32 * 0x00_0004)
             | sample.to_box_flags();
         Some(flags)
+    }
+    fn box_payload_size(&self) -> Result<u32> {
+        let size = track!(ByteCounter::calculate(|w| self.write_box_payload(w)))?;
+        Ok(size as u32)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
         write_u32!(writer, self.samples.len() as u32);

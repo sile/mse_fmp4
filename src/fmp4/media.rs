@@ -56,8 +56,11 @@ impl Mp4Box for MovieFragmentBox {
 }
 
 /// 8.8.5 Movie Fragment Header Box (ISO/IEC 14496-12).
-#[derive(Debug, Default)]
-pub struct MovieFragmentHeaderBox;
+#[derive(Debug)]
+pub struct MovieFragmentHeaderBox {
+    /// The number associated with this fragment.
+    pub sequence_number: u32,
+}
 impl Mp4Box for MovieFragmentHeaderBox {
     const BOX_TYPE: [u8; 4] = *b"mfhd";
 
@@ -65,8 +68,16 @@ impl Mp4Box for MovieFragmentHeaderBox {
         Some(0)
     }
     fn write_box_payload<W: Write>(&self, mut writer: W) -> Result<()> {
-        write_u32!(writer, 1); // sequence_number
+        write_u32!(writer, self.sequence_number);
         Ok(())
+    }
+}
+impl Default for MovieFragmentHeaderBox {
+    /// Return the default value of `MovieFragmentHeaderBox`.
+    ///
+    /// This is equivalent to `MovieFragmentHeaderBox { sequence_number: 1 }`.
+    fn default() -> Self {
+        MovieFragmentHeaderBox { sequence_number: 1 }
     }
 }
 

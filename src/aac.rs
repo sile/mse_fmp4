@@ -1,6 +1,6 @@
 //! AAC related constituent elements.
-use std::io::Read;
 use byteorder::{BigEndian, ReadBytesExt};
+use std::io::Read;
 
 use {ErrorKind, Result};
 

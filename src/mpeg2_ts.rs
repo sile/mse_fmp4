@@ -1,15 +1,14 @@
 //! MPEG-2 TS related constituent elements.
-use std::cmp;
-use std::collections::HashMap;
-use std::io::Write;
 use byteorder::{BigEndian, WriteBytesExt};
 use mpeg2ts;
 use mpeg2ts::es::{StreamId, StreamType};
 use mpeg2ts::pes::{PesPacketReader, ReadPesPacket};
 use mpeg2ts::time::Timestamp;
 use mpeg2ts::ts::{Pid, ReadTsPacket, TsPacket, TsPayload};
+use std::cmp;
+use std::collections::HashMap;
+use std::io::Write;
 
-use {Error, ErrorKind, Result};
 use aac::{self, AdtsHeader};
 use avc::{AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalUnitType,
           SpsSummary};
@@ -17,6 +16,7 @@ use fmp4::{AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSe
            MediaDataBox, MediaSegment, Mp4Box, Mpeg4EsDescriptorBox, Sample, SampleEntry,
            SampleFlags, TrackBox, TrackExtendsBox, TrackFragmentBox};
 use io::ByteCounter;
+use {Error, ErrorKind, Result};
 
 /// Reads TS packets from `reader`, and converts them into fragmented MP4 segments.
 pub fn to_fmp4<R: ReadTsPacket>(reader: R) -> Result<(InitializationSegment, MediaSegment)> {

@@ -1,7 +1,7 @@
 use std::io::Write;
 
-use Result;
 use io::ByteCounter;
+use Result;
 
 /// MP4 (ISO BMFF) box.
 pub trait Mp4Box {

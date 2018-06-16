@@ -4,11 +4,11 @@ extern crate mse_fmp4;
 #[macro_use]
 extern crate trackable;
 
-use std::fs::File;
 use clap::{App, Arg};
+use mpeg2ts::ts::TsPacketReader;
 use mse_fmp4::io::WriteTo;
 use mse_fmp4::mpeg2_ts;
-use mpeg2ts::ts::TsPacketReader;
+use std::fs::File;
 use trackable::error::Failure;
 
 fn main() {

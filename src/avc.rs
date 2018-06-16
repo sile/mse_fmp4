@@ -1,9 +1,9 @@
 //! AVC (H.264) related constituent elements.
-use std::io::{Read, Write};
 use byteorder::ReadBytesExt;
+use std::io::{Read, Write};
 
-use {ErrorKind, Result};
 use io::AvcBitReader;
+use {ErrorKind, Result};
 
 /// AVC decoder configuration record.
 #[allow(missing_docs)]

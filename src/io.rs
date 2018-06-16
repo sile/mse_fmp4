@@ -1,6 +1,6 @@
 //! I/O related constituent elements.
-use std::io::{sink, Read, Result as IoResult, Sink, Write};
 use byteorder::ReadBytesExt;
+use std::io::{sink, Read, Result as IoResult, Sink, Write};
 
 use Result;
 

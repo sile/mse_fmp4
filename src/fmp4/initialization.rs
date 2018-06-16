@@ -1,11 +1,11 @@
 use std::ffi::CString;
 use std::io::Write;
 
-use {ErrorKind, Result};
 use aac::{AacProfile, ChannelConfiguration, SamplingFrequency};
 use avc::AvcDecoderConfigurationRecord;
 use fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
 use io::WriteTo;
+use {ErrorKind, Result};
 
 /// [3. Initialization Segments][init_segment] (ISO BMFF Byte Stream Format)
 ///

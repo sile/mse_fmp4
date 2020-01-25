@@ -15,9 +15,9 @@ extern crate trackable;
 
 macro_rules! track_io {
     ($expr:expr) => {
-        $expr.map_err(|e: ::std::io::Error| {
+        $expr.map_err(|e: std::io::Error| {
             use trackable::error::ErrorKindExt;
-            track!(::Error::from(::ErrorKind::Other.cause(e)))
+            track!(crate::Error::from(crate::ErrorKind::Other.cause(e)))
         })
     };
 }
@@ -120,4 +120,4 @@ pub mod mpeg2_ts;
 mod error;
 
 /// This crate specific `Result` type.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -1,6 +1,5 @@
+use crate::Result;
 use std::io::Write;
-
-use Result;
 
 /// MP4 (ISO BMFF) box.
 pub trait Mp4Box {

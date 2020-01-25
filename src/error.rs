@@ -2,9 +2,8 @@ use mpeg2ts;
 use trackable::error::{ErrorKind as TrackableErrorKind, ErrorKindExt, TrackableError};
 
 /// This crate specific `Error` type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, TrackableError)]
 pub struct Error(TrackableError<ErrorKind>);
-derive_traits_for_trackable_error_newtype!(Error, ErrorKind);
 impl From<mpeg2ts::Error> for Error {
     fn from(f: mpeg2ts::Error) -> Self {
         let kind = match *f.kind() {

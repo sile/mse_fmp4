@@ -1,4 +1,15 @@
 //! MPEG-2 TS related constituent elements.
+use crate::aac::{self, AdtsHeader};
+use crate::avc::{
+    AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalUnitType, SpsSummary,
+};
+use crate::fmp4::{
+    AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSegment, MediaDataBox,
+    MediaSegment, Mp4Box, Mpeg4EsDescriptorBox, Sample, SampleEntry, SampleFlags, TrackBox,
+    TrackExtendsBox, TrackFragmentBox,
+};
+use crate::io::ByteCounter;
+use crate::{Error, ErrorKind, Result};
 use byteorder::{BigEndian, WriteBytesExt};
 use mpeg2ts;
 use mpeg2ts::es::{StreamId, StreamType};
@@ -8,18 +19,6 @@ use mpeg2ts::ts::{Pid, ReadTsPacket, TsPacket, TsPayload};
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Write;
-
-use aac::{self, AdtsHeader};
-use avc::{
-    AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalUnitType, SpsSummary,
-};
-use fmp4::{
-    AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSegment, MediaDataBox,
-    MediaSegment, Mp4Box, Mpeg4EsDescriptorBox, Sample, SampleEntry, SampleFlags, TrackBox,
-    TrackExtendsBox, TrackFragmentBox,
-};
-use io::ByteCounter;
-use {Error, ErrorKind, Result};
 
 /// Reads TS packets from `reader`, and converts them into fragmented MP4 segments.
 pub fn to_fmp4<R: ReadTsPacket>(reader: R) -> Result<(InitializationSegment, MediaSegment)> {

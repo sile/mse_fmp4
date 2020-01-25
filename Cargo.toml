@@ -7,6 +7,7 @@ homepage = "https://github.com/sile/mse_fmp4"
 repository = "https://github.com/sile/mse_fmp4"
 readme = "README.md"
 license = "MIT"
+edition = "2018"
 
 [badges]
 travis-ci = {repository = "sile/mse_fmp4"}

@@ -1,8 +1,7 @@
 //! AAC related constituent elements.
+use crate::{ErrorKind, Result};
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::Read;
-
-use {ErrorKind, Result};
 
 pub(crate) const SAMPLES_IN_FRAME: usize = 1024;
 

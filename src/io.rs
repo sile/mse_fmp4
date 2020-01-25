@@ -1,8 +1,7 @@
 //! I/O related constituent elements.
+use crate::Result;
 use byteorder::ReadBytesExt;
 use std::io::{sink, Read, Result as IoResult, Sink, Write};
-
-use Result;
 
 /// A trait for objects which can be written to byte-oriented sinks.
 pub trait WriteTo {

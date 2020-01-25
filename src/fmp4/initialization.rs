@@ -1,11 +1,10 @@
+use crate::aac::{AacProfile, ChannelConfiguration, SamplingFrequency};
+use crate::avc::AvcDecoderConfigurationRecord;
+use crate::fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
+use crate::io::{ByteCounter, WriteTo};
+use crate::{ErrorKind, Result};
 use std::ffi::CString;
 use std::io::Write;
-
-use aac::{AacProfile, ChannelConfiguration, SamplingFrequency};
-use avc::AvcDecoderConfigurationRecord;
-use fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
-use io::{ByteCounter, WriteTo};
-use {ErrorKind, Result};
 
 /// [3. Initialization Segments][init_segment] (ISO BMFF Byte Stream Format)
 ///

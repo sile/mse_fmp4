@@ -1,8 +1,7 @@
+use crate::fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
+use crate::io::{ByteCounter, WriteTo};
+use crate::{ErrorKind, Result};
 use std::io::Write;
-
-use fmp4::{Mp4Box, AUDIO_TRACK_ID, VIDEO_TRACK_ID};
-use io::{ByteCounter, WriteTo};
-use {ErrorKind, Result};
 
 /// [ISO BMFF Byte Stream Format: 4. Media Segments][media_segment]
 ///

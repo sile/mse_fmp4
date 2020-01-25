@@ -1,9 +1,8 @@
 //! AVC (H.264) related constituent elements.
+use crate::io::AvcBitReader;
+use crate::{ErrorKind, Result};
 use byteorder::ReadBytesExt;
 use std::io::{Read, Write};
-
-use io::AvcBitReader;
-use {ErrorKind, Result};
 
 /// AVC decoder configuration record.
 #[allow(missing_docs)]

@@ -10,11 +10,14 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use aac::{self, AdtsHeader};
-use avc::{AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalUnitType,
-          SpsSummary};
-use fmp4::{AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSegment,
-           MediaDataBox, MediaSegment, Mp4Box, Mpeg4EsDescriptorBox, Sample, SampleEntry,
-           SampleFlags, TrackBox, TrackExtendsBox, TrackFragmentBox};
+use avc::{
+    AvcDecoderConfigurationRecord, ByteStreamFormatNalUnits, NalUnit, NalUnitType, SpsSummary,
+};
+use fmp4::{
+    AacSampleEntry, AvcConfigurationBox, AvcSampleEntry, InitializationSegment, MediaDataBox,
+    MediaSegment, Mp4Box, Mpeg4EsDescriptorBox, Sample, SampleEntry, SampleFlags, TrackBox,
+    TrackExtendsBox, TrackFragmentBox,
+};
 use io::ByteCounter;
 use {Error, ErrorKind, Result};
 
@@ -357,10 +360,12 @@ impl<R: ReadTsPacket> ReadTsPacket for TsPacketReader<R> {
     fn read_ts_packet(&mut self) -> mpeg2ts::Result<Option<TsPacket>> {
         if let Some(packet) = track!(self.inner.read_ts_packet())? {
             match packet.payload {
-                Some(TsPayload::Pmt(ref pmt)) => for es_info in &pmt.table {
-                    self.pid_to_stream_type
-                        .insert(es_info.elementary_pid, es_info.stream_type);
-                },
+                Some(TsPayload::Pmt(ref pmt)) => {
+                    for es_info in &pmt.table {
+                        self.pid_to_stream_type
+                            .insert(es_info.elementary_pid, es_info.stream_type);
+                    }
+                }
                 Some(TsPayload::Pes(ref pes)) => {
                     if self.pid_to_stream_type.contains_key(&packet.header.pid) {
                         self.stream_id_to_pid

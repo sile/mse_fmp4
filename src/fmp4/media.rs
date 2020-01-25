@@ -232,7 +232,8 @@ impl Mp4Box for TrackRunBox {
         Some(1)
     }
     fn box_flags(&self) -> Option<u32> {
-        let sample = self.samples
+        let sample = self
+            .samples
             .first()
             .cloned()
             .unwrap_or_else(Sample::default);
@@ -293,7 +294,8 @@ pub struct Sample {
 }
 impl Sample {
     fn to_box_flags(&self) -> u32 {
-        (self.duration.is_some() as u32 * 0x00_0100) | (self.size.is_some() as u32 * 0x00_0200)
+        (self.duration.is_some() as u32 * 0x00_0100)
+            | (self.size.is_some() as u32 * 0x00_0200)
             | (self.flags.is_some() as u32 * 0x00_0400)
             | (self.composition_time_offset.is_some() as u32 * 0x00_0800)
     }
@@ -313,7 +315,8 @@ pub struct SampleFlags {
 }
 impl SampleFlags {
     fn to_u32(&self) -> u32 {
-        (u32::from(self.is_leading) << 26) | (u32::from(self.sample_depends_on) << 24)
+        (u32::from(self.is_leading) << 26)
+            | (u32::from(self.sample_depends_on) << 24)
             | (u32::from(self.sample_is_depdended_on) << 22)
             | (u32::from(self.sample_has_redundancy) << 20)
             | (u32::from(self.sample_padding_value) << 17)

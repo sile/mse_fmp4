@@ -1,7 +1,7 @@
 mse_fmp4
 =========
 
-[![mse_fmp4](http://meritbadge.herokuapp.com/mse_fmp4)](https://crates.io/crates/mse_fmp4)
+[![mse_fmp4](https://img.shields.io/crates/v/mse_fmp4.svg)](https://crates.io/crates/mse_fmp4)
 [![Documentation](https://docs.rs/mse_fmp4/badge.svg)](https://docs.rs/mse_fmp4)
 [![Build Status](https://travis-ci.org/sile/mse_fmp4.svg?branch=master)](https://travis-ci.org/sile/mse_fmp4)
 [![Code Coverage](https://codecov.io/gh/sile/mse_fmp4/branch/master/graph/badge.svg)](https://codecov.io/gh/sile/mse_fmp4/branch/master)
